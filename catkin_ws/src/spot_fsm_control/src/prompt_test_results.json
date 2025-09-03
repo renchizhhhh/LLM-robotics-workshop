@@ -1,0 +1,302 @@
+{
+  "constrained": {
+    "task1_simple": {
+      "test_result": {
+        "success": true,
+        "actions": [
+          {
+            "op": "stand",
+            "height": 0.0
+          },
+          {
+            "op": "aim_hand",
+            "x": 0.7,
+            "y": 0.0,
+            "z": 0.1
+          }
+        ],
+        "raw_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"aim_hand\",\"x\":0.7,\"y\":0.0,\"z\":0.1}\n]",
+        "cleaned_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"aim_hand\",\"x\":0.7,\"y\":0.0,\"z\":0.1}\n]",
+        "num_actions": 2
+      },
+      "quality": {
+        "score": 82,
+        "max_score": 100,
+        "num_generated": 2,
+        "num_expected": 2,
+        "key_actions_present": {
+          "stand": true,
+          "sit": false,
+          "move_relative": false,
+          "aim_hand": true,
+          "detect_label": false,
+          "pick_from_pixel": false
+        },
+        "issues": [],
+        "invalid_operations": [],
+        "yaw_issues": [],
+        "scoring_breakdown": {
+          "step_count_score": 30,
+          "required_actions_score": 40,
+          "range_bonus": 12,
+          "penalties": 0,
+          "final_score": 82
+        }
+      },
+      "ground_truth": [
+        {
+          "op": "stand",
+          "height": 0.0
+        },
+        {
+          "op": "aim_hand",
+          "x": 0.75,
+          "y": 0.0,
+          "z": 0.0
+        }
+      ]
+    },
+    "task2_medium": {
+      "test_result": {
+        "success": true,
+        "actions": [
+          {
+            "op": "stand",
+            "height": 0.0
+          },
+          {
+            "op": "move_relative",
+            "x": 5.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "timeout": 30.0
+          },
+          {
+            "op": "move_relative",
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 1.5707963267948966,
+            "timeout": 5.0
+          },
+          {
+            "op": "move_relative",
+            "x": 5.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "timeout": 30.0
+          },
+          {
+            "op": "move_relative",
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 1.5707963267948966,
+            "timeout": 5.0
+          },
+          {
+            "op": "move_relative",
+            "x": 5.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "timeout": 30.0
+          },
+          {
+            "op": "move_relative",
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 1.5707963267948966,
+            "timeout": 5.0
+          },
+          {
+            "op": "move_relative",
+            "x": 5.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "timeout": 30.0
+          },
+          {
+            "op": "move_relative",
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 1.5707963267948966,
+            "timeout": 5.0
+          }
+        ],
+        "raw_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0}\n]",
+        "cleaned_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0},\n  {\"op\":\"move_relative\",\"x\":5.0,\"y\":0.0,\"yaw\":0.0,\"timeout\":30.0},\n  {\"op\":\"move_relative\",\"x\":0.0,\"y\":0.0,\"yaw\":1.5707963267948966,\"timeout\":5.0}\n]",
+        "num_actions": 9
+      },
+      "quality": {
+        "score": 90,
+        "max_score": 100,
+        "num_generated": 9,
+        "num_expected": 9,
+        "key_actions_present": {
+          "stand": true,
+          "sit": false,
+          "move_relative": true,
+          "aim_hand": false,
+          "detect_label": false,
+          "pick_from_pixel": false
+        },
+        "issues": [],
+        "invalid_operations": [],
+        "yaw_issues": [],
+        "scoring_breakdown": {
+          "step_count_score": 30,
+          "required_actions_score": 40,
+          "range_bonus": 20,
+          "penalties": 0,
+          "final_score": 90
+        }
+      },
+      "ground_truth": [
+        {
+          "op": "stand",
+          "height": 0.2
+        },
+        {
+          "op": "move_relative",
+          "x": 2.0,
+          "y": 0.0,
+          "yaw": 0.0,
+          "timeout": 10.0
+        },
+        {
+          "op": "move_relative",
+          "x": 0.0,
+          "y": 0.0,
+          "yaw": 1.5708,
+          "timeout": 5.0
+        },
+        {
+          "op": "move_relative",
+          "x": 2.0,
+          "y": 0.0,
+          "yaw": 0.0,
+          "timeout": 10.0
+        },
+        {
+          "op": "move_relative",
+          "x": 0.0,
+          "y": 0.0,
+          "yaw": 1.5708,
+          "timeout": 5.0
+        },
+        {
+          "op": "move_relative",
+          "x": 2.0,
+          "y": 0.0,
+          "yaw": 0.0,
+          "timeout": 10.0
+        },
+        {
+          "op": "move_relative",
+          "x": 0.0,
+          "y": 0.0,
+          "yaw": 1.5708,
+          "timeout": 5.0
+        },
+        {
+          "op": "move_relative",
+          "x": 2.0,
+          "y": 0.0,
+          "yaw": 0.0,
+          "timeout": 10.0
+        },
+        {
+          "op": "move_relative",
+          "x": 0.0,
+          "y": 0.0,
+          "yaw": 1.5708,
+          "timeout": 5.0
+        }
+      ]
+    },
+    "task3_complex": {
+      "test_result": {
+        "success": true,
+        "actions": [
+          {
+            "op": "stand",
+            "height": 0.0
+          },
+          {
+            "op": "aim_hand",
+            "x": 0.75,
+            "y": 0.0,
+            "z": 0.2
+          },
+          {
+            "op": "detect_label",
+            "label": "cup",
+            "conf": 0.6,
+            "image_source": "hand_color_image"
+          },
+          {
+            "op": "pick_from_pixel",
+            "image_source": "hand_color_image",
+            "x": 0,
+            "y": 0,
+            "top_down": true,
+            "auto_walk": true,
+            "timeout": 30.0
+          }
+        ],
+        "raw_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"aim_hand\",\"x\":0.75,\"y\":0.0,\"z\":0.2},\n  {\"op\":\"detect_label\",\"label\":\"cup\",\"conf\":0.6,\"image_source\":\"hand_color_image\"},\n  {\"op\":\"pick_from_pixel\",\"image_source\":\"hand_color_image\",\"x\":0,\"y\":0,\"top_down\":true,\"auto_walk\":true,\"timeout\":30.0}\n]",
+        "cleaned_response": "[\n  {\"op\":\"stand\",\"height\":0.0},\n  {\"op\":\"aim_hand\",\"x\":0.75,\"y\":0.0,\"z\":0.2},\n  {\"op\":\"detect_label\",\"label\":\"cup\",\"conf\":0.6,\"image_source\":\"hand_color_image\"},\n  {\"op\":\"pick_from_pixel\",\"image_source\":\"hand_color_image\",\"x\":0,\"y\":0,\"top_down\":true,\"auto_walk\":true,\"timeout\":30.0}\n]",
+        "num_actions": 4
+      },
+      "quality": {
+        "score": 82,
+        "max_score": 100,
+        "num_generated": 4,
+        "num_expected": 4,
+        "key_actions_present": {
+          "stand": true,
+          "sit": false,
+          "move_relative": false,
+          "aim_hand": true,
+          "detect_label": true,
+          "pick_from_pixel": true
+        },
+        "issues": [],
+        "invalid_operations": [],
+        "yaw_issues": [],
+        "scoring_breakdown": {
+          "step_count_score": 30,
+          "required_actions_score": 40,
+          "range_bonus": 12,
+          "penalties": 0,
+          "final_score": 82
+        }
+      },
+      "ground_truth": [
+        {
+          "op": "stand",
+          "height": 0.0
+        },
+        {
+          "op": "aim_hand",
+          "x": 0.75,
+          "y": 0.0,
+          "z": 0.0
+        },
+        {
+          "op": "detect_label",
+          "label": "cup",
+          "conf": 0.01,
+          "image_source": "hand_color_image"
+        },
+        {
+          "op": "pick_from_pixel",
+          "image_source": "hand_color_image",
+          "x": 0,
+          "y": 0,
+          "top_down": true,
+          "auto_walk": true,
+          "timeout": 25.0
+        }
+      ]
+    }
+  }
+}
