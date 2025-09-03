@@ -1,0 +1,31 @@
+<launch>
+  <arg name="tcp_ip" default="0.0.0.0"/>
+  <arg name="tcp_port" default="10000"/>
+  <arg name="hostname" default="192.168.1.109"/>
+  <rosparam param="ROS_IP">0.0.0.0</rosparam>
+  
+  <!-- FSM Node in dummy mode -->
+  <node
+      pkg="spot_fsm_control"
+      type="fsm_node.py"
+      name="fsm_node" 
+      output="screen" 
+      args="">
+    <param name="hostname" value="$(arg hostname)"/>
+    <param name="dummy_mode" value="true"/>
+  </node>
+  
+  <!-- Natural Language Control -->
+  <node
+      pkg="spot_fsm_control"
+      type="natural_language_control.py"
+      name="natural_language_control" 
+      output="screen" 
+      args=""/>
+  
+  <!-- Unity endpoint (optional for testing) -->
+  <node name="unity_endpoint" pkg="ros_tcp_endpoint" type="default_server_endpoint.py" output="screen">
+    <param name="tcp_ip" type="string" value="$(arg tcp_ip)"/>
+    <param name="tcp_port" type="int" value="$(arg tcp_port)"/>
+  </node>
+</launch>

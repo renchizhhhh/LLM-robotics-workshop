@@ -1,0 +1,9 @@
+<launch>
+  <node
+      pkg="discrete_controller_control"
+      type="main.py"
+      name="discrete_controller_control" 
+      output="screen" 
+      args=""
+    />
+</launch>

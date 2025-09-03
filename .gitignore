@@ -1,0 +1,12 @@
+# catkin
+build/
+devel/
+log/
+install/
+.depend
+# misc
+*.pyc
+__pycache__/
+*.swp
+# large data
+debug_images/
