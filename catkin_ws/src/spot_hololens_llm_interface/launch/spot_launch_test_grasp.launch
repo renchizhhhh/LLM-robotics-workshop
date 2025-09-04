@@ -1,0 +1,25 @@
+<launch>
+    <!-- Parameters -->
+    <arg name="hostname" default="192.168.1.109" />
+    <arg name="use_cv_interface" default="true" />
+    <arg name="image_topic" default="/spot/camera/frontright_fisheye/image" />
+    <arg name="verbose" default="false" />
+
+    <!-- Estop ROS node: set hostname and timeout here -->
+    <node
+        pkg="spot_hololens_llm_interface"
+        type="estop_ros_node.py"
+        name="estop_node"
+        output="screen">
+        <param name="timeout" value="4.0"/>
+        <param name="hostname" value="$(arg hostname)"/>
+    </node>
+
+    <!-- Robot Manager Node -->
+    <node name="spot_entrance" pkg="spot_hololens_llm_interface" type="spot_entrance.py" output="screen">
+        <param name="hostname" value="$(arg hostname)" />
+        <param name="verbose" value="$(arg verbose)" />
+    </node>
+    
+    
+</launch>

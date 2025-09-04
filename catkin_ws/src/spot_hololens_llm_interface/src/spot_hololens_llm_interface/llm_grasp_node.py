@@ -10,9 +10,12 @@
 import argparse
 import sys
 import time
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
+
+import rospy
 
 import bosdyn.client
 import bosdyn.client.estop
@@ -20,11 +23,13 @@ import bosdyn.client.lease
 import bosdyn.client.util
 from bosdyn.api import estop_pb2, geometry_pb2, image_pb2, manipulation_api_pb2
 from bosdyn.client.estop import EstopClient
-from bosdyn.client.frame_helpers import VISION_FRAME_NAME, get_vision_tform_body, math_helpers
+from bosdyn.client.frame_helpers import VISION_FRAME_NAME, get_vision_tform_body, math_helpers, get_se2_a_tform_b, BODY_FRAME_NAME, ODOM_FRAME_NAME
 from bosdyn.client.image import ImageClient
 from bosdyn.client.manipulation_api_client import ManipulationApiClient
 from bosdyn.client.robot_command import RobotCommandClient, blocking_stand
 from bosdyn.client.robot_state import RobotStateClient
+
+
 
 g_image_click = None
 g_image_display = None
@@ -38,6 +43,7 @@ def verify_estop(robot):
         error_message = 'Robot is estopped. Please use an external E-Stop client, such as the' \
                         ' estop SDK example, to configure E-Stop.'
         robot.logger.error(error_message)
+        rospy.logerr(error_message)
         raise Exception(error_message)
 
 
@@ -69,21 +75,32 @@ def arm_object_grasp(config):
         # is on. Commands would fail if this did not happen. We can also check that the robot is
         # powered at any point.
         robot.logger.info('Powering on robot... This may take a several seconds.')
+        rospy.loginfo('Powering on robot... This may take a several seconds.')
         robot.power_on(timeout_sec=20)
         assert robot.is_powered_on(), 'Robot power on failed.'
         robot.logger.info('Robot powered on.')
+        rospy.loginfo('Robot powered on.')
 
         # Tell the robot to stand up. The command service is used to issue commands to a robot.
         # The set of valid commands for a robot depends on hardware configuration. See
         # RobotCommandBuilder for more detailed examples on command building. The robot
         # command service requires timesync between the robot and the client.
         robot.logger.info('Commanding robot to stand...')
+        rospy.loginfo('Commanding robot to stand...')
         command_client = robot.ensure_client(RobotCommandClient.default_service_name)
         blocking_stand(command_client, timeout_sec=10)
         robot.logger.info('Robot standing.')
+        rospy.loginfo('Robot standing.')
+
+        # Record the initial body pose (in odom frame) to return to later.
+        robot_state = robot_state_client.get_robot_state()
+        initial_odom_tform_body = get_se2_a_tform_b(
+            robot_state.kinematic_state.transforms_snapshot, ODOM_FRAME_NAME, BODY_FRAME_NAME)
+        initial_pose_proto = initial_odom_tform_body.to_proto()
 
         # Take a picture with a camera
         robot.logger.info('Getting an image from: %s', config.image_source)
+        rospy.loginfo(f'Getting an image from: {config.image_source}')
         image_responses = image_client.get_image_from_sources([config.image_source])
 
         if len(image_responses) != 1:
@@ -104,6 +121,7 @@ def arm_object_grasp(config):
 
         # Show the image to the user and wait for them to click on a pixel
         robot.logger.info('Click on an object to start grasping...')
+        rospy.loginfo('Click on an object to start grasping...')
         image_title = 'Click to grasp'
         cv2.namedWindow(image_title)
         cv2.setMouseCallback(image_title, cv_mouse_callback)
@@ -120,8 +138,10 @@ def arm_object_grasp(config):
 
         robot.logger.info(
             f'Picking object at image location ({g_image_click[0]}, {g_image_click[1]})')
+        rospy.loginfo(f'Picking object at image location ({g_image_click[0]}, {g_image_click[1]})')
         robot.logger.info('Picking object at image location (%s, %s)', g_image_click[0],
                           g_image_click[1])
+        rospy.loginfo(f'Picking object at image location ({g_image_click[0]}, {g_image_click[1]})')
 
         pick_vec = geometry_pb2.Vec2(x=g_image_click[0], y=g_image_click[1])
 
@@ -160,15 +180,70 @@ def arm_object_grasp(config):
             time.sleep(0.25)
 
         robot.logger.info('Finished grasp.')
+        rospy.loginfo('Finished grasp.')
+
+        # After grasp finished, return to the recorded initial body pose and stow the arm,
+        # then proceed to sit down and power off.
+        try:
+            robot.logger.info('Returning to initial position...')
+            from bosdyn.client.robot_command import RobotCommandBuilder, block_for_trajectory_cmd, block_until_arm_arrives
+
+            #  Release object if grasp succeeded
+            if response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED:
+                robot.logger.info('Grasp succeeded — releasing object before returning.')
+                rospy.loginfo('Grasp succeeded — releasing object before returning.')
+                # <EDIT 1>
+                try:
+                    # Open gripper to release
+                    open_cmd = RobotCommandBuilder.claw_gripper_open_command()
+                    command_client.robot_command(open_cmd, end_time_secs=time.time() + 2)
+                    # Brief pause to allow gripper to open.
+                    time.sleep(1.5)
+
+                    carry_cmd = RobotCommandBuilder.arm_carry_command()
+                    carry_cmd_id = command_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
+                    arm_ok = block_until_arm_arrives(command_client, carry_cmd_id, timeout_sec=10)
+                    if not arm_ok:
+                        robot.logger.warning('Arm carry (raise) timed out or failed.')
+                        rospy.logwarn('Arm carry (raise) timed out or failed.')
+
+                    # Open gripper to release
+                    close_cmd = RobotCommandBuilder.claw_gripper_close_command()
+                    command_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
+                    # Brief pause to allow gripper to close.
+                    time.sleep(1.5)
+                except Exception as exc:
+                    # Log but continue with returning/stowing to avoid leaving the robot in an unsafe state.
+                    robot.logger.exception('Failed to open gripper or raise arm after grasp: %s', exc)
+                    rospy.logerr('Failed to open gripper or raise arm after grasp: %s', exc)
+                # </EDIT 1>
+
+            # Stow the arm to a safe position.
+            stow_cmd = RobotCommandBuilder.arm_stow_command()
+            stow_cmd_id = command_client.robot_command(stow_cmd, end_time_secs=time.time() + 3)
+            arm_ok = block_until_arm_arrives(command_client, stow_cmd_id, timeout_sec=10)
+            if not arm_ok:
+                robot.logger.warning('Arm stow timed out or failed.')
+
+            # Move the body back to the initial odom SE2 pose.
+            go_cmd = RobotCommandBuilder.synchro_se2_trajectory_command(initial_pose_proto, ODOM_FRAME_NAME)
+            move_cmd_id = command_client.robot_command(go_cmd, end_time_secs=time.time() + 5)
+            moved = block_for_trajectory_cmd(command_client, move_cmd_id, timeout_sec=15, logger=robot.logger)
+            if not moved:
+                robot.logger.warning('Timeout while returning to initial pose.')
+        except Exception as exc:  # Keep from crashing; log and continue to power off.
+            robot.logger.exception('Failed to return to initial position or stow arm: %s', exc)
         time.sleep(4.0)
 
         robot.logger.info('Sitting down and turning off.')
+        rospy.loginfo('Sitting down and turning off.')
 
         # Power the robot off. By specifying "cut_immediately=False", a safe power off command
         # is issued to the robot. This will attempt to sit the robot before powering off.
         robot.power_off(cut_immediately=False, timeout_sec=20)
         assert not robot.is_powered_on(), 'Robot power off failed.'
         robot.logger.info('Robot safely powered off.')
+        rospy.loginfo('Robot safely powered off.')
 
 
 def cv_mouse_callback(event, x, y, flags, param):
@@ -310,15 +385,6 @@ def main():
 
 
 if __name__ == '__main__':
-    # If running inside a ROS environment, initialize a ROS node and build options
-    # from ROS parameters; otherwise fall back to the existing CLI behavior.
-    import os
-    try:
-        # Import rospy on demand to avoid requiring ROS for non-ROS runs.
-        import rospy
-        from types import SimpleNamespace
-    except Exception:
-        rospy = None  # Not running under ROS
 
     if (rospy is not None) and ('ROS_MASTER_URI' in os.environ or 'ROS_NAMESPACE' in os.environ):
         rospy.init_node('llm_grasp_node', anonymous=True)
