@@ -1,9 +1,9 @@
-bosdyn-api==3.2.0
-bosdyn-choreography-client==3.2.0
-bosdyn-choreography-protos==3.2.0
-bosdyn-client==3.2.0
-bosdyn-core==3.2.0
-bosdyn-mission==3.2.0
+bosdyn-api==5.0.1
+bosdyn-choreography-client==5.0.1
+bosdyn-choreography-protos==5.0.1
+bosdyn-client==5.0.1
+bosdyn-core==5.0.1
+bosdyn-mission==5.0.1
 certifi==2022.9.24
 charset-normalizer==2.1.1
 Deprecated==1.2.13
@@ -17,7 +17,6 @@ requests==2.28.1
 six==1.16.0
 urllib3==1.26.12
 wrapt==1.14.1
-python-dotenv
 python-statemachine
 rospy
 omegaconf
@@ -26,4 +25,3 @@ opencv-python
 openvr
 matplotlib
 tk-tools
-pygame
