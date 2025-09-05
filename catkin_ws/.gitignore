@@ -17,8 +17,6 @@ install/
 log/
 *.launch.py
 *.launch.xml
-*.msg
-*.srv
 
 # General
 debug

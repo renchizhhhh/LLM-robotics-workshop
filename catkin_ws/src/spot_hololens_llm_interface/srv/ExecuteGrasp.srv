@@ -1,0 +1,15 @@
+int32 x
+int32 y
+# Grasp constraints
+bool force_top_down_grasp
+bool force_horizontal_grasp  
+bool force_45_angle_grasp
+bool force_squeeze_grasp
+# Image metadata (from GetImage service)
+geometry_msgs/TransformStamped[] transforms_snapshot
+string frame_name_image_sensor
+sensor_msgs/CameraInfo camera_model
+---
+bool success
+string message
+int32 manipulation_cmd_id

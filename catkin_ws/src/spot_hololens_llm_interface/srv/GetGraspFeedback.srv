@@ -1,0 +1,6 @@
+int32 manipulation_cmd_id
+---
+bool success
+string message
+int32 current_state
+string state_name

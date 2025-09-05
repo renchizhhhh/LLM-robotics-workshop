@@ -1,0 +1,8 @@
+string image_source
+---
+bool success
+string message
+sensor_msgs/Image image
+geometry_msgs/TransformStamped[] transforms
+string frame_name_image_sensor
+sensor_msgs/CameraInfo camera_info

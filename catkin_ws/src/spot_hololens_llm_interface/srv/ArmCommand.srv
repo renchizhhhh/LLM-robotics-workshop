@@ -1,0 +1,4 @@
+string command_type  # "open", "close", "stow", "carry"
+---
+bool success
+string message
