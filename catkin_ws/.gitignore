@@ -20,4 +20,4 @@ log/
 
 # General
 debug
-.env
+#.env

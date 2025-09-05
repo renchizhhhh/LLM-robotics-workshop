@@ -1,0 +1,42 @@
+<launch>
+    <!-- Real robot test launch file - requires real robot connection -->
+    <!-- 
+    Usage:
+    1. Run this launch file: roslaunch spot_hololens_llm_interface spot_real_test.launch
+    2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot_manager.py
+    -->
+    
+    <!-- Parameters -->
+    <arg name="hostname" default="192.168.1.109" />
+    <arg name="verbose" default="false" />
+    <arg name="username" default="user" />
+    <arg name="password" default="corspotuser1" />
+
+    <!-- Estop ROS node: set hostname and timeout here -->
+    <node
+        pkg="spot_hololens_llm_interface"
+        type="estop_ros_node.py"
+        name="estop_node"
+        output="screen">
+        <param name="timeout" value="4.0"/>
+        <param name="hostname" value="$(arg hostname)"/>
+        <param name="dummy_mode" value="false"/>
+        <param name="username" value="$(arg username)"/>
+        <param name="password" value="$(arg password)"/>
+    </node>
+
+    <!-- Robot Manager Node in real mode -->
+    <node name="spot_entrance" pkg="spot_hololens_llm_interface" type="spot_entrance.py" output="screen">
+        <param name="dummy_mode" value="false"/>
+        <param name="hostname" value="$(arg hostname)" />
+        <param name="verbose" value="$(arg verbose)" />
+        <param name="username" value="$(arg username)"/>
+        <param name="password" value="$(arg password)"/>
+    </node>
+    
+    <!-- FSM in real mode -->
+    <node name="spot_fsm" pkg="spot_hololens_llm_interface" type="finite_state_machine.py" output="screen">
+        <param name="dummy_mode" value="false"/>
+    </node>
+    
+</launch>

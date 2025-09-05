@@ -1,0 +1,36 @@
+<launch>
+    <!-- Dummy mode test launch file - no real robot needed -->
+    <!-- Perfect for testing FSM logic and state transitions -->
+    <!-- 
+    Usage:
+    1. Run this launch file: roslaunch spot_hololens_llm_interface spot_dummy_test.launch
+l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot_manager.py
+    -->
+    
+    <!-- Parameters -->
+    <arg name="verbose" default="false" />
+    
+    <!-- Dummy Estop ROS node - provides estop services without real robot -->
+    <node
+        pkg="spot_hololens_llm_interface"
+        type="estop_ros_node.py"
+        name="estop_node"
+        output="screen">
+        <param name="dummy_mode" value="true"/>
+        <param name="timeout" value="4.0"/>
+        <param name="hostname" value="dummy"/>  <!-- Dummy hostname for dummy mode -->
+    </node>
+
+    <!-- Spot Robot Manager in dummy mode - provides all services without real robot -->
+    <node name="spot_entrance" pkg="spot_hololens_llm_interface" type="spot_entrance.py" output="screen">
+        <param name="dummy_mode" value="true"/>
+        <param name="hostname" value="dummy"/>  <!-- Dummy hostname for dummy mode -->
+        <param name="verbose" value="$(arg verbose)" />
+    </node>
+    
+    <!-- FSM in dummy mode -->
+    <node name="spot_fsm" pkg="spot_hololens_llm_interface" type="finite_state_machine.py" output="screen">
+        <param name="dummy_mode" value="true"/>
+    </node>
+    
+</launch>

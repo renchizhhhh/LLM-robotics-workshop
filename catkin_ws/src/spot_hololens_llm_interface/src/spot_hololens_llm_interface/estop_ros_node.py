@@ -39,29 +39,50 @@ class EstopRosNode(object):
         rospy.init_node('estop_node')
         hostname = rospy.get_param('~hostname', rospy.get_param('hostname', None))
         timeout = float(rospy.get_param('~timeout', rospy.get_param('timeout', 5.0)))
-        if hostname is None:
-            rospy.logerr("No 'hostname' param set (robot hostname/IP). Set with <param name='hostname' value='x.x.x.x'/>")
-            raise rospy.ROSInitException("hostname param required")
-
-        sdk = bosdyn.client.create_standard_sdk('ros_estop_node')
-        robot = sdk.create_robot(hostname)
-        try:
-            bosdyn.client.util.authenticate(robot)
-        except Exception as e:
-            rospy.logwarn("Authentication with robot may have failed (exception: %s). Ensure credentials are available.", e)
-
-        # Create keepalive & robot-state client
-        try:
-            self.estop_keep_alive, _ = make_estop_keepalive(robot, timeout, 'ROS E-Stop')
-        except Exception as e:
-            rospy.logerr("Failed to create estop endpoint: %s", e)
-            raise
-
-        try:
-            self.state_client = robot.ensure_client(RobotStateClient.default_service_name)
-        except Exception as e:
-            rospy.logwarn("Could not create RobotStateClient: %s", e)
+        dummy_mode = rospy.get_param('~dummy_mode', False)
+        
+        if dummy_mode:
+            rospy.loginfo("Estop node starting in DUMMY MODE - no real robot connection")
+            self.dummy_mode = True
+            self.estop_keep_alive = None
             self.state_client = None
+            self.robot = None
+        else:
+            if hostname is None:
+                rospy.logerr("No 'hostname' param set (robot hostname/IP). Set with <param name='hostname' value='x.x.x.x'/>")
+                raise rospy.ROSInitException("hostname param required")
+
+            self.dummy_mode = False
+            sdk = bosdyn.client.create_standard_sdk('ros_estop_node')
+            robot = sdk.create_robot(hostname)
+            
+            # Get credentials from ROS parameters and set as environment variables
+            username = rospy.get_param('~username', 'user')
+            password = rospy.get_param('~password', '')
+            
+            # Set environment variables for authentication
+            import os
+            os.environ['BOSDYN_CLIENT_USERNAME'] = username
+            os.environ['BOSDYN_CLIENT_PASSWORD'] = password
+            
+            try:
+                bosdyn.client.util.authenticate(robot)
+                rospy.loginfo("Estop node authenticated with robot using provided credentials")
+            except Exception as e:
+                rospy.logwarn("Authentication with robot may have failed (exception: %s). Ensure credentials are available.", e)
+
+            # Create keepalive & robot-state client
+            try:
+                self.estop_keep_alive, _ = make_estop_keepalive(robot, timeout, 'ROS E-Stop')
+            except Exception as e:
+                rospy.logerr("Failed to create estop endpoint: %s", e)
+                raise
+
+            try:
+                self.state_client = robot.ensure_client(RobotStateClient.default_service_name)
+            except Exception as e:
+                rospy.logwarn("Could not create RobotStateClient: %s", e)
+                self.state_client = None
 
         # Services
         self.svc_stop = rospy.Service('estop/stop', Trigger, self.handle_stop)
@@ -77,6 +98,10 @@ class EstopRosNode(object):
         self.loop()
 
     def handle_stop(self, req):
+        if self.dummy_mode:
+            rospy.loginfo("[DUMMY] Estop triggered (stopped)")
+            return TriggerResponse(success=True, message="Estop triggered (stopped) - dummy mode")
+        
         try:
             self.estop_keep_alive.stop()
             return TriggerResponse(success=True, message="Estop triggered (stopped).")
@@ -84,6 +109,10 @@ class EstopRosNode(object):
             return TriggerResponse(success=False, message="Failed to stop: %s" % e)
 
     def handle_allow(self, req):
+        if self.dummy_mode:
+            rospy.loginfo("[DUMMY] Estop released (allowed)")
+            return TriggerResponse(success=True, message="Estop released (allowed) - dummy mode")
+        
         try:
             self.estop_keep_alive.allow()
             return TriggerResponse(success=True, message="Estop released (allowed).")
@@ -91,6 +120,10 @@ class EstopRosNode(object):
             return TriggerResponse(success=False, message="Failed to allow: %s" % e)
 
     def handle_settle(self, req):
+        if self.dummy_mode:
+            rospy.loginfo("[DUMMY] Settle then cut issued")
+            return TriggerResponse(success=True, message="Settle then cut issued - dummy mode")
+        
         try:
             self.estop_keep_alive.settle_then_cut()
             return TriggerResponse(success=True, message="Settle then cut issued.")
@@ -103,7 +136,9 @@ class EstopRosNode(object):
         while not rospy.is_shutdown():
             status = "UNKNOWN"
             try:
-                if self.state_client is not None:
+                if self.dummy_mode:
+                    status = "NOT_STOPPED"  # Always allow in dummy mode
+                elif self.state_client is not None:
                     state = self.state_client.get_robot_state()
                     estop_states = state.estop_states
                     # default NOT_STOPPED

@@ -1,220 +1,192 @@
 #!/usr/bin/env python
 
-import time
+import rospy
 import math
 from statemachine import StateMachine, State
-import numpy as np
-import math
-# from spot_control_interface import SpotControlInterface
-from spot_hololens_llm_interface.arm_impedance_control_helpers import get_root_T_ground_body
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, get_a_tform_b
-from bosdyn.client.math_helpers import Quat, SE3Pose
+from std_srvs.srv import Trigger
+from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest
 
 class SpotStateMachine(StateMachine):
     """
-    A state machine for Spot to control all the inputs from the NUI to a command to the robot
-    The state machine is used to increase the safety of operation and prevent initiation of states that cannot match with other states.
+    Minimal state machine for Spot robot control.
+    Acts as a bridge between high-level commands and ROS services.
     """
-    sit = State(initial=True)
-
-    # Stand
+    # States
+    disconnected = State(initial=True)
+    connected = State()
+    powered_off = State()
+    sit = State()
     stand = State()
-    stand_high = State()
-    stand_low = State()
-    sit_down = ( stand.to(sit) | stand_high.to(sit) | stand_low.to(sit) )
-    stand_up = ( sit.to(stand) | stand_high.to(stand) | stand_low.to(stand) )
-    stand_up_high = (stand.to(stand_high) | sit.to(stand_high)|stand_low.to(stand_high))
-    stand_up_low = (stand.to(stand_low) | sit.to(stand_low) | stand_high.to(stand_low))
-
-    walk_forward = State()
-    walk_backward = State()
-    walk_left = State()
-    walk_right = State()
-
-    walk_to_forward = stand.to(walk_forward)
-    walk_to_backward = stand.to(walk_backward)
-    walk_to_left = stand.to(walk_left)
-    walk_to_right = stand.to(walk_right)
-
-    deitic_location_movement = State()
-    move_to_location = stand.to(deitic_location_movement)
-
-    face_operator = State()
-    face_to_operator = stand.to(face_operator)
+    moving = State()
     
-    pick_object = State()
-    pick_up_object = stand.to(pick_object)
+    # Transitions
+    connect = disconnected.to(connected)
+    power_on = connected.to(powered_off)
+    stand_up = (powered_off.to(stand) | sit.to(stand))
+    sit_down = (stand.to(sit) | moving.to(sit))
+    start_moving = (stand.to(moving) | moving.to(moving))
+    stop_moving = moving.to(stand)
+    get_image = (stand.to(stand) | moving.to(moving) | sit.to(sit))
+    power_off_from_stand = stand.to(powered_off)
+    power_off_from_sit = sit.to(powered_off)
+    disconnect = powered_off.to(disconnected)
 
-
-    turn_left = State()
-    turn_right = State()
-    turn_to_left = stand.to(turn_left)
-    turn_to_right = stand.to(turn_right)
-    
-    
-
-    gaze_control = State()
-    arm_trajectory = State()
-    start_gaze = stand.to(gaze_control)
-    start_trajectory = stand.to(arm_trajectory)
-    
-    direct_arm_control = State()
-    start_direct_arm_control = stand.to(direct_arm_control)
-    
-    stop_action = (
-        walk_forward.to(stand) |
-        walk_backward.to(stand) |
-        walk_left.to(stand) |
-        walk_right.to(stand) |
-        turn_right.to(stand) |
-        turn_left.to(stand) |
-        deitic_location_movement.to(stand) |
-        face_operator.to(stand) |
-        pick_object.to(stand) |
-        arm_trajectory.to(stand) |
-        gaze_control.to(stand) |
-        direct_arm_control.to(stand)
-    )
-    
-    turn_off = State(final=True)
-    turn_off_robot = sit.to(turn_off)
-
-    def __init__(self, robot):
-        self.robot = robot
+    def __init__(self, dummy_mode=None):
+        # Check for dummy mode parameter
+        self.dummy_mode = dummy_mode if dummy_mode is not None else rospy.get_param('~dummy_mode', False)
+        
+        if self.dummy_mode:
+            rospy.loginfo("FSM: Running in DUMMY MODE - using dummy services")
+        else:
+            rospy.loginfo("FSM: Running in REAL MODE - using real robot services")
+        
+        # Setup ROS service connections
+        self.connect_srv = rospy.ServiceProxy('/spot_entrance/connect', Trigger)
+        self.power_on_srv = rospy.ServiceProxy('/spot_entrance/power_on', Trigger)
+        self.stand_srv = rospy.ServiceProxy('/spot_entrance/stand', Trigger)
+        self.sit_srv = rospy.ServiceProxy('/spot_entrance/sit', Trigger)
+        self.move_srv = rospy.ServiceProxy('/spot_entrance/move_to_position', MoveToPosition)
+        self.get_image_srv = rospy.ServiceProxy('/spot_entrance/get_image', GetImage)
+        self.power_off_srv = rospy.ServiceProxy('/spot_entrance/power_off', Trigger)
+        self.disconnect_srv = rospy.ServiceProxy('/spot_entrance/disconnect', Trigger)
+        
+        # Initialize the state machine after setting up services
         super().__init__()
-        self.robot_speed = 0.3
-        self.movement_duration = 2
         
-    def after_stop_action(self):
-        self.robot.stop()
-        self.robot.ready_or_stow_arm(stow=True)
-        print("Action stopped.")
+        # Default movement parameters (used as fallback)
+        self.move_x = 0.0
+        self.move_y = 0.0
+        self.move_yaw = 0.0
+        self.move_frame = "body"
         
-    def on_enter_walk_forward(self):
-        self.robot.forward = self.robot_speed
-        self.robot.two_d_location_body_frame_command(1.5, 0, 0)
-        # self.robot.move_command(duration=self.movement_duration)
-        print("move forward")
+    # State entry methods - call services when states change
+    def on_enter_connected(self):
+        rospy.loginfo("FSM: Connecting to robot")
+        self._call_service(self.connect_srv, "Connect")
 
-    def on_enter_walk_backward(self):
-        self.robot.forward = -1 * self.robot_speed
-        self.robot.two_d_location_body_frame_command(-1.5, 0, 0)
-        # self.robot.move_command(duration=self.movement_duration)
-        print("move backward")
-
-    def on_enter_stop_walk(self):
-        self.robot.stop()
-        print("Stop")
-
-    def on_enter_turn_left(self):
-        self.robot.rotate = self.robot_speed
-        self.robot.two_d_location_body_frame_command(0, 0, math.pi/2)
-        # self.robot.move_command(duration=self.movement_duration)
-        print("Rotate left")
-
-    def on_enter_turn_right(self):
-        self.robot.rotate = -1 * self.robot_speed
-        # self.robot.move_command(duration=self.movement_duration)
-        self.robot.two_d_location_body_frame_command(0, 0, -math.pi/2)
-        print("Rotate right")
-
-    def on_enter_walk_left(self):
-        self.robot.strafe = self.robot_speed
-        self.robot.two_d_location_body_frame_command(0, 0.75, 0)
-        # self.robot.move_command(duration=self.movement_duration)
-        print("Move left")
-
-    def on_enter_walk_right(self):
-        self.robot.strafe = -1 * self.robot_speed
-        self.robot.two_d_location_body_frame_command(0, -0.75, 0)
-        # self.robot.move_command(duration=self.movement_duration)
-        print("Move right")
-
-    def on_exit_arm_trajectory(self):
-        self.robot.stand(0.0)
+    def on_enter_powered_off(self):
+        rospy.loginfo("FSM: Powering on robot")
+        self._call_service(self.power_on_srv, "Power on")
 
     def on_enter_stand(self):
-        if self.robot:
-            self.robot.stand(0.0)
-            print(f"Standing")
-    
-    def on_enter_stand_high(self):
-        self.robot.stand(0.1)
-        print(f"Standing high")
-
-    def on_enter_stand_low(self):
-        self.robot.stand(-0.1)
-        print(f"Standing low")
+        rospy.loginfo("FSM: Standing up")
+        self._call_service(self.stand_srv, "Stand")
 
     def on_enter_sit(self):
-        if self.robot:
-            self.robot.sit_down()
-            print(f"Sit down.")
+        rospy.loginfo("FSM: Sitting down")
+        self._call_service(self.sit_srv, "Sit")
 
-    def on_enter_gaze_control(self):
-        print("Gaze Control.")
-        self.robot.gaze_control()
-
-    def on_enter_arm_trajectory(self):
-        self.robot.arm_trajectory()
-
-    def on_enter_direct_arm_control(self):
-        self.robot.ready_or_stow_arm()
+    def on_enter_moving(self):
+        # Get parameters from kwargs if available, otherwise use stored ones
+        kwargs = getattr(self, '_current_kwargs', {})
+        move_x = kwargs.get('x', self.move_x)
+        move_y = kwargs.get('y', self.move_y)
+        move_yaw = kwargs.get('yaw', self.move_yaw)
+        move_frame = kwargs.get('frame', self.move_frame)
         
-        task_T_tool_desired = SE3Pose(0.75, 0, 0.45, Quat(1, 0, 0, 0))
-        odom_T_task = get_root_T_ground_body(robot_state=self.robot.robot_state_client.get_robot_state(),
-                                             root_frame_name=GRAV_ALIGNED_BODY_FRAME_NAME)
-        wr1_T_tool = SE3Pose(0, 0, 0, Quat.from_pitch(-math.pi / 2))
-        
-        self.robot.move_to_cartesian_pose_rt_task(task_T_tool_desired, odom_T_task, wr1_T_tool)
-        
-        time.sleep(1)
+        rospy.loginfo(f"FSM: Moving x={move_x}, y={move_y}, yaw={move_yaw}")
+        self._call_move_service(move_x, move_y, move_yaw, move_frame)
     
-        self.robot.init_pos_empty = True
-        self.robot.current_state_direct_control = True
-        # self.robot.direct_control_trajectory()
+    def on_enter_get_image(self):
+        # Get image source from kwargs, default to frontleft_fisheye_image
+        kwargs = getattr(self, '_current_kwargs', {})
+        image_source = kwargs.get('image_source', 'frontleft_fisheye_image')
         
-    def on_exit_direct_arm_control(self):
-        print("Exiting direct control")
-        self.robot.current_state_direct_control = False
-        time.sleep(1)
-        self.robot.stand(0.0)
-        time.sleep(2)
-        self.robot.ready_or_stow_arm(stow=True)
-        time.sleep(1)
+        rospy.loginfo(f"FSM: Getting image from {image_source}")
+        self._call_get_image_service(image_source)
 
-    def on_enter_turn_off(self):
-        self.robot.stand(0.0)
-        self.robot.sit_down()
+    def on_enter_powered_off_from_stand(self):
+        rospy.loginfo("FSM: Powering off robot")
+        self._call_service(self.power_off_srv, "Power off")
+
+    def on_enter_powered_off_from_sit(self):
+        rospy.loginfo("FSM: Powering off robot")
+        self._call_service(self.power_off_srv, "Power off")
+
+    def on_enter_disconnected(self):
+        rospy.loginfo("FSM: Disconnecting from robot")
+        self._call_service(self.disconnect_srv, "Disconnect")
+
+    def send(self, event, **kwargs):
+        """Override send method to pass keyword arguments to state entry methods"""
+        # Store kwargs for potential use in state entry methods
+        self._current_kwargs = kwargs
+        return super().send(event)
+    
+    def _call_get_image_service(self, image_source):
+        """Helper to call get image service"""
+        try:
+            req = GetImageRequest()
+            req.image_source = image_source
+            resp = self.get_image_srv(req)
+            if resp.success:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.loginfo(f"FSM: Image retrieved successfully{mode_text}")
+            else:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.logerr(f"FSM: Failed to get image{mode_text}: {resp.message}")
+        except Exception as e:
+            mode_text = " (dummy)" if self.dummy_mode else ""
+            rospy.logerr(f"FSM: Image service call failed{mode_text}: {e}")
+
+    # Helper methods
+    def _call_service(self, service, name):
+        """Helper to call a service and log result"""
+        try:
+            resp = service()
+            if resp.success:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.loginfo(f"FSM: {name} successful{mode_text}")
+            else:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.logerr(f"FSM: {name} failed{mode_text}: {resp.message}")
+        except Exception as e:
+            mode_text = " (dummy)" if self.dummy_mode else ""
+            rospy.logerr(f"FSM: {name} service call failed{mode_text}: {e}")
+
+    def _call_move_service(self, x=None, y=None, yaw=None, frame=None):
+        """Helper to call move service with provided or default parameters"""
+        try:
+            # Use provided parameters or fall back to stored ones
+            move_x = x if x is not None else self.move_x
+            move_y = y if y is not None else self.move_y
+            move_yaw = yaw if yaw is not None else self.move_yaw
+            move_frame = frame if frame is not None else self.move_frame
+            
+            req = MoveToPositionRequest()
+            req.target_pose.position.x = move_x
+            req.target_pose.position.y = move_y
+            req.target_pose.position.z = 0.0
+            req.target_pose.orientation.w = math.cos(move_yaw/2)
+            req.target_pose.orientation.z = math.sin(move_yaw/2)
+            req.frame_name = move_frame
+            
+            resp = self.move_srv(req)
+            if resp.success:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.loginfo(f"FSM: Move successful{mode_text}: {resp.message}")
+            else:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.logerr(f"FSM: Move failed{mode_text}: {resp.message}")
+        except Exception as e:
+            mode_text = " (dummy)" if self.dummy_mode else ""
+            rospy.logerr(f"FSM: Move service call failed{mode_text}: {e}")
 
 
 if __name__ == "__main__":
-    spot = SpotStateMachine(robot=None)#SpotControlInterface())
-
-    img_path = "docs/images/readme_spotstatemachine1.png"
-    spot._graph().write_png(img_path)
+    # Initialize ROS node
+    rospy.init_node('spot_finite_state_machine')
     
-    msg = spot.send("stand_up")
-    print(msg)
-
-    spot.send("stand_up_high")
+    # Create FSM (will auto-detect dummy mode from parameter)
+    spot = SpotStateMachine()
     
-    ## How to error handle wrong actions to state machine
-    try:
-        spot.send("start_trajectory")
-    except:
-        try:
-            spot.send("stop_walking")
-            spot.send("start_trajectory")
-        except:
-            try:
-                spot.send("stand_up")
-                print("Stand up first")
-                spot.send("start_trajectory")
-            except:
-                print("Start trajectory not possible")
-                ## Do some handling or more feedback to user
+    if spot.dummy_mode:
+        rospy.loginfo("Spot Finite State Machine (DUMMY) started and ready for commands")
+    else:
+        rospy.loginfo("Spot Finite State Machine (REAL) started and ready for commands")
     
-    img_path = "docs/images/readme_spotstatemachine2.png"
-    spot._graph().write_png(img_path)
+    rospy.loginfo("Use test_real_spot_manager.py to test the FSM")
+    
+    # Keep the node running
+    rospy.spin()
 

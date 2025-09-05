@@ -54,6 +54,7 @@ class SpotSharedServices:
     def __init__(self, robot_manager):
         """Initialize shared services with reference to robot manager"""
         self.robot_manager = robot_manager
+        self.dummy_mode = getattr(robot_manager, 'dummy_mode', False)
         self.cv_bridge = CvBridge()
         
         # Setup robot operation services
@@ -64,7 +65,10 @@ class SpotSharedServices:
         self.srv_move_to_position = rospy.Service('~move_to_position', MoveToPosition, self.handle_move_to_position)
         self.srv_arm_command = rospy.Service('~arm_command', ArmCommand, self.handle_arm_command)
         
-        rospy.loginfo("Spot shared services initialized")
+        if self.dummy_mode:
+            rospy.loginfo("Spot shared services initialized in DUMMY MODE")
+        else:
+            rospy.loginfo("Spot shared services initialized")
     
     def handle_get_image(self, req):
         """Get image from specified camera source"""
@@ -238,7 +242,7 @@ class SpotSharedServices:
 
         Supported frames:
          - "body" / "flat_body" : target_pose is expressed in the robot's body frame (x forward, y left)
-         - "odom" / "map"       : target_pose is expressed in odom frame
+         - "odom" / "vision"       : target_pose is expressed in odom frame
 
         This implementation sends the trajectory command and then polls robot_command_feedback to
         determine whether the command actually completed successfully.
@@ -255,6 +259,27 @@ class SpotSharedServices:
             return resp
         
         response = MoveToPositionResponse()
+        
+        # Handle dummy mode
+        if self.dummy_mode:
+            # Extract movement parameters
+            x = req.target_pose.position.x
+            y = req.target_pose.position.y
+            frame = req.frame_name or "body"
+            
+            rospy.loginfo(f"[DUMMY] Moving to position x={x:.2f}, y={y:.2f} in {frame} frame...")
+            
+            # Simulate movement time based on distance
+            distance = (x**2 + y**2)**0.5
+            move_time = max(distance * 2.0, 1.0)  # 2 seconds per meter, minimum 1 second
+            time.sleep(move_time)
+            
+            rospy.loginfo(f"[DUMMY] Move completed")
+            
+            response.success = True
+            response.message = f"Move completed (dummy): x={x:.2f}, y={y:.2f}, frame={frame}"
+            return response
+        
         rotate_speed = 0.6  # rad/s
         forward_speed = 0.4  # m/s
 

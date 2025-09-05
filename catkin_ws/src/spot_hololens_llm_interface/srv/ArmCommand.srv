@@ -1,4 +1,4 @@
-string command_type  # "open", "close", "stow", "carry"
+string command_type
 ---
 bool success
 string message

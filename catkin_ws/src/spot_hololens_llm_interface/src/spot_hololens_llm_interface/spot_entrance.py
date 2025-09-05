@@ -19,28 +19,52 @@ from std_msgs.msg import Bool, String
 from spot_hololens_llm_interface.spot_shared_services import SpotSharedServices
 
 class SpotRobotManager:
-    def __init__(self, ready_for_command=True, start_services=True):
+    def __init__(self, ready_for_command=True, start_services=True, dummy_mode=False):
         # Get parameters
+        self.dummy_mode = dummy_mode or rospy.get_param('~dummy_mode', False)
         self.hostname = rospy.get_param('~hostname', None)
         self.verbose = rospy.get_param('~verbose', False)
         
-        if self.hostname is None:
-            rospy.logerr("No hostname specified!")
-            return
+        if self.dummy_mode:
+            rospy.loginfo("Spot Robot Manager starting in DUMMY MODE - no real robot connection")
+            # Initialize dummy robot state
+            self.robot = None
+            self.sdk = None
+            self.lease_client = None
+            self.lease_keep_alive = None
+            self.command_client = None
+            self.robot_state_client = None
+            self.image_client = None
+            self.manipulation_api_client = None
+        else:
+            if self.hostname is None:
+                rospy.logerr("No hostname specified!")
+                return
+                
+            # Initialize robot connection
+            bosdyn.client.util.setup_logging(self.verbose)
+            self.sdk = bosdyn.client.create_standard_sdk('SpotRobotManager')
+            self.robot = self.sdk.create_robot(self.hostname)
             
-        # Initialize robot connection
-        bosdyn.client.util.setup_logging(self.verbose)
-        self.sdk = bosdyn.client.create_standard_sdk('SpotRobotManager')
-        self.robot = self.sdk.create_robot(self.hostname)
-        bosdyn.client.util.authenticate(self.robot)
-        
-        # Initialize clients
-        self.lease_client = self.robot.ensure_client(bosdyn.client.lease.LeaseClient.default_service_name)
-        self.lease_keep_alive = None
-        self.command_client = None
-        self.robot_state_client = None
-        self.image_client = None
-        self.manipulation_api_client = None
+            # Get credentials from ROS parameters and set as environment variables
+            username = rospy.get_param('~username', 'user')
+            password = rospy.get_param('~password', '')
+            
+            # Set environment variables for authentication
+            import os
+            os.environ['BOSDYN_CLIENT_USERNAME'] = username
+            os.environ['BOSDYN_CLIENT_PASSWORD'] = password
+            
+            bosdyn.client.util.authenticate(self.robot)
+            rospy.loginfo("Spot entrance authenticated with robot using provided credentials")
+            
+            # Initialize clients
+            self.lease_client = self.robot.ensure_client(bosdyn.client.lease.LeaseClient.default_service_name)
+            self.lease_keep_alive = None
+            self.command_client = None
+            self.robot_state_client = None
+            self.image_client = None
+            self.manipulation_api_client = None
         
         # Robot state tracking
         self.is_connected = False
@@ -95,6 +119,13 @@ class SpotRobotManager:
 
     def handle_connect(self, req):
         """Connect to the robot and acquire lease"""
+        if self.dummy_mode:
+            rospy.loginfo("[DUMMY] Connecting to robot...")
+            time.sleep(0.5)  # Simulate connection delay
+            self.is_connected = True
+            rospy.loginfo("[DUMMY] Connected to robot")
+            return TriggerResponse(success=True, message="Connected to robot (dummy)")
+        
         try:
             self.robot.time_sync.wait_for_sync()
             self.verify_estop()
@@ -121,6 +152,15 @@ class SpotRobotManager:
     
     def handle_disconnect(self, req):
         """Disconnect from the robot and release lease"""
+        if self.dummy_mode:
+            rospy.loginfo("[DUMMY] Disconnecting from robot...")
+            time.sleep(0.3)
+            self.is_connected = False
+            self.is_powered = False
+            self.is_standing = False
+            rospy.loginfo("[DUMMY] Disconnected from robot")
+            return TriggerResponse(success=True, message="Disconnected from robot (dummy)")
+        
         try:
             if self.is_powered:
                 self.handle_power_off(req)
@@ -139,6 +179,16 @@ class SpotRobotManager:
     
     def handle_power_on(self, req):
         """Power on the robot"""
+        if self.dummy_mode:
+            if not self.is_connected:
+                return TriggerResponse(success=False, message="Not connected to robot")
+                
+            rospy.loginfo("[DUMMY] Powering on robot...")
+            time.sleep(1.0)  # Simulate power on delay
+            self.is_powered = True
+            rospy.loginfo("[DUMMY] Robot powered on")
+            return TriggerResponse(success=True, message="Robot powered on (dummy)")
+        
         try:
             if not self.is_connected:
                 return TriggerResponse(success=False, message="Not connected to robot")
@@ -157,6 +207,20 @@ class SpotRobotManager:
     
     def handle_power_off(self, req):
         """Power off the robot"""
+        if self.dummy_mode:
+            if not self.is_connected:
+                return TriggerResponse(success=False, message="Not connected to robot")
+                
+            if self.is_standing:
+                self.handle_sit(req)
+                
+            rospy.loginfo("[DUMMY] Powering off robot...")
+            time.sleep(0.8)
+            self.is_powered = False
+            self.is_standing = False
+            rospy.loginfo("[DUMMY] Robot powered off")
+            return TriggerResponse(success=True, message="Robot powered off (dummy)")
+        
         try:
             if not self.is_connected:
                 return TriggerResponse(success=False, message="Not connected to robot")
@@ -178,6 +242,16 @@ class SpotRobotManager:
     
     def handle_stand(self, req):
         """Command the robot to stand"""
+        if self.dummy_mode:
+            if not self.is_powered:
+                return TriggerResponse(success=False, message="Robot not powered on")
+                
+            rospy.loginfo("[DUMMY] Commanding robot to stand...")
+            time.sleep(2.0)  # Simulate standing delay
+            self.is_standing = True
+            rospy.loginfo("[DUMMY] Robot standing")
+            return TriggerResponse(success=True, message="Robot standing (dummy)")
+        
         try:
             if not self.is_powered:
                 return TriggerResponse(success=False, message="Robot not powered on")
@@ -199,6 +273,16 @@ class SpotRobotManager:
     
     def handle_sit(self, req):
         """Command the robot to sit"""
+        if self.dummy_mode:
+            if not self.is_powered:
+                return TriggerResponse(success=False, message="Robot not powered on")
+            
+            rospy.loginfo("[DUMMY] Commanding robot to sit...")
+            time.sleep(1.5)  # Simulate sitting delay
+            self.is_standing = False
+            rospy.loginfo("[DUMMY] Robot sitting")
+            return TriggerResponse(success=True, message="Robot sitting (dummy)")
+        
         try:
             if not self.is_powered:
                 return TriggerResponse(success=False, message="Robot not powered on")
