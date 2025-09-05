@@ -151,14 +151,18 @@ class SpotSharedServices:
             response.message = "Initial pose retrieved"
         else:
             response.success = False
-            response.message = "No initial pose stored"
+            response.message = "No initial pose stored. Robot didn't stand or move after boot?"
             
         return response
     
     def handle_execute_grasp(self, req):
         """Execute grasp command using robot's manipulation API"""
         response = ExecuteGraspResponse()
-        
+
+        response.success = True
+        response.message = f"Skipping the grasp for debug. The request is: {req}."
+        return response
+
         try:
             clients = self.robot_manager.get_clients()
             if not clients or not clients['manipulation_api']:

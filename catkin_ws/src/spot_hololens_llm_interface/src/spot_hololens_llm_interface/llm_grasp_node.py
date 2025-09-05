@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 import rospy
-
+import os
 import bosdyn.client
 import bosdyn.client.estop
 import bosdyn.client.lease

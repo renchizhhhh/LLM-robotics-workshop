@@ -58,14 +58,16 @@ class SpotGraspActionServer:
         self.image_click = None
         self.image_display = None
         self.click_event = threading.Event()
+        # currently open OpenCV window name (to avoid creating multiple windows)
+        self.window_name = None
         
         # Action servers
-        self.grasp_server = actionlib.SimpleActionServer(
-            'grasp_object', 
-            GraspObjectAction, 
-            execute_cb=self.execute_grasp_cb, 
-            auto_start=False
-        )
+        # self.grasp_server = actionlib.SimpleActionServer(
+        #     'grasp_object', 
+        #     GraspObjectAction, 
+        #     execute_cb=self.execute_grasp_cb, 
+        #     auto_start=False
+        # )
         
         self.interactive_grasp_server = actionlib.SimpleActionServer(
             'interactive_grasp', 
@@ -74,76 +76,76 @@ class SpotGraspActionServer:
             auto_start=False
         )
         
-        self.grasp_server.start()
+        # self.grasp_server.start()
         self.interactive_grasp_server.start()
         
         rospy.loginfo("Spot grasp action servers started")
     
-    def execute_grasp_cb(self, goal):
-        """Execute grasp with specified pixel coordinates"""
-        rospy.loginfo(f"Executing grasp at pixel ({goal.pixel_x}, {goal.pixel_y})")
+    # def execute_grasp_cb(self, goal):
+    #     """Execute grasp with specified pixel coordinates"""
+    #     rospy.loginfo(f"Executing grasp at pixel ({goal.pixel_x}, {goal.pixel_y})")
         
-        result = GraspObjectResult()
-        feedback = GraspObjectFeedback()
+    #     result = GraspObjectResult()
+    #     feedback = GraspObjectFeedback()
         
-        try:
-            # Store initial pose if requested
-            initial_pose = None
-            if goal.return_to_initial_pose:
-                pose_resp = self.get_initial_pose_srv(GetInitialPoseRequest())
-                if pose_resp.success:
-                    initial_pose = pose_resp.initial_pose
-                else:
-                    rospy.logwarn(f"Failed to get initial pose: {pose_resp.message}")
+    #     try:
+    #         # Store initial pose if requested
+    #         initial_pose = None
+    #         if goal.return_to_initial_pose:
+    #             pose_resp = self.get_initial_pose_srv(GetInitialPoseRequest())
+    #             if pose_resp.success:
+    #                 initial_pose = pose_resp.initial_pose
+    #             else:
+    #                 rospy.logwarn(f"Failed to get initial pose: {pose_resp.message}")
             
-            # Get image from specified source
-            feedback.current_state = "ACQUIRING_IMAGE"
-            feedback.progress = 0.1
-            feedback.status_message = f"Getting image from {goal.image_source}"
-            self.grasp_server.publish_feedback(feedback)
+    #         # Get image from specified source
+    #         feedback.current_state = "ACQUIRING_IMAGE"
+    #         feedback.progress = 0.1
+    #         feedback.status_message = f"Getting image from {goal.image_source}"
+    #         self.grasp_server.publish_feedback(feedback)
             
-            image_req = GetImageRequest()
-            image_req.image_source = goal.image_source
-            image_resp = self.get_image_srv(image_req)
+    #         image_req = GetImageRequest()
+    #         image_req.image_source = goal.image_source
+    #         image_resp = self.get_image_srv(image_req)
             
-            if not image_resp.success:
-                result.success = False
-                result.message = f"Failed to get image: {image_resp.message}"
-                self.grasp_server.set_aborted(result)
-                return
+    #         if not image_resp.success:
+    #             result.success = False
+    #             result.message = f"Failed to get image: {image_resp.message}"
+    #             self.grasp_server.set_aborted(result)
+    #             return
             
-            # Execute grasp
-            feedback.current_state = "EXECUTING_GRASP"
-            feedback.progress = 0.3
-            feedback.status_message = "Executing grasp command"
-            self.grasp_server.publish_feedback(feedback)
+    #         # Execute grasp
+    #         feedback.current_state = "EXECUTING_GRASP"
+    #         feedback.progress = 0.3
+    #         feedback.status_message = "Executing grasp command"
+    #         self.grasp_server.publish_feedback(feedback)
             
-            success, grasp_state = self._execute_grasp_at_pixel(
-                goal.pixel_x, goal.pixel_y, image_resp, goal, feedback
-            )
+    #         success, grasp_state = self._execute_grasp_at_pixel(
+    #             goal.pixel_x, goal.pixel_y, image_resp, goal, feedback
+    #         )
             
-            # Return to initial pose if requested and successful
-            if success and goal.return_to_initial_pose and initial_pose:
-                feedback.current_state = "RETURNING_TO_INITIAL_POSE"
-                feedback.progress = 0.9
-                feedback.status_message = "Returning to initial position"
-                self.grasp_server.publish_feedback(feedback)
-                self._return_to_initial_pose(initial_pose)
+    #         # Return to initial pose if requested and successful
+    #         if success and goal.return_to_initial_pose and initial_pose:
+    #             feedback.current_state = "RETURNING_TO_INITIAL_POSE"
+    #             feedback.progress = 0.9
+    #             feedback.status_message = "Returning to initial position"
+    #             self.grasp_server.publish_feedback(feedback)
+    #             self._return_to_initial_pose(initial_pose)
             
-            result.success = success
-            result.grasp_state = grasp_state
-            result.message = "Grasp completed successfully" if success else "Grasp failed"
+    #         result.success = success
+    #         result.grasp_state = grasp_state
+    #         result.message = "Grasp completed successfully" if success else "Grasp failed"
             
-            if success:
-                self.grasp_server.set_succeeded(result)
-            else:
-                self.grasp_server.set_aborted(result)
+    #         if success:
+    #             self.grasp_server.set_succeeded(result)
+    #         else:
+    #             self.grasp_server.set_aborted(result)
                 
-        except Exception as e:
-            rospy.logerr(f"Grasp action failed: {e}")
-            result.success = False
-            result.message = f"Exception during grasp: {str(e)}"
-            self.grasp_server.set_aborted(result)
+    #     except Exception as e:
+    #         rospy.logerr(f"Grasp action failed: {e}")
+    #         result.success = False
+    #         result.message = f"Exception during grasp: {str(e)}"
+    #         self.grasp_server.set_aborted(result)
     
     def execute_interactive_grasp_cb(self, goal):
         """Execute interactive grasp with user clicking on image"""
@@ -191,19 +193,22 @@ class SpotGraspActionServer:
                 self.interactive_grasp_server.publish_feedback(feedback)
                 
                 window_title = goal.window_title if goal.window_title else 'Click to grasp'
-                cv2.namedWindow(window_title)
-                cv2.setMouseCallback(window_title, self._mouse_callback)
+                # store and use a single window name so mouse callback doesn't create another window
+                self.window_name = window_title
+                cv2.namedWindow(self.window_name)
+                cv2.setMouseCallback(self.window_name, self._mouse_callback)
                 
                 self.image_display = cv_image
                 self.image_click = None
                 self.click_event.clear()
                 
-                cv2.imshow(window_title, self.image_display)
+                cv2.imshow(self.window_name, self.image_display)
                 
                 # Wait for click or action cancellation
                 while self.image_click is None and not rospy.is_shutdown():
                     if self.interactive_grasp_server.is_preempt_requested():
                         cv2.destroyAllWindows()
+                        self.window_name = None
                         result.success = False
                         result.message = "Action was cancelled"
                         self.interactive_grasp_server.set_preempted(result)
@@ -212,6 +217,7 @@ class SpotGraspActionServer:
                     key = cv2.waitKey(1) & 0xFF
                     if key == ord('q') or key == ord('Q'):
                         cv2.destroyAllWindows()
+                        self.window_name = None
                         result.success = False
                         result.message = "User cancelled with 'q' key"
                         self.interactive_grasp_server.set_aborted(result)
@@ -220,6 +226,8 @@ class SpotGraspActionServer:
                     time.sleep(0.1)
                 
                 cv2.destroyAllWindows()
+                # clear stored window name after destroying windows
+                self.window_name = None
                 
                 if self.image_click is None:
                     result.success = False
@@ -284,14 +292,17 @@ class SpotGraspActionServer:
                 height, width = clone.shape[:2]
                 cv2.line(clone, (0, y), (width, y), color, thickness)
                 cv2.line(clone, (x, 0), (x, height), color, thickness)
-                cv2.imshow('Click to grasp', clone)
+                # reuse the active window name if available to avoid creating new windows
+                win = self.window_name if hasattr(self, 'window_name') and self.window_name else 'Click to grasp'
+                cv2.imshow(win, clone)
     
     def _execute_grasp_at_pixel(self, pixel_x, pixel_y, image_response, goal, feedback):
         """Execute the actual grasp at specified pixel coordinates"""
         try:
             # Build the grasp request
             grasp_req = ExecuteGraspRequest()
-            grasp_req.pixel_xy = geometry_pb2.Vec2(x=pixel_x, y=pixel_y)
+            grasp_req.x = int(pixel_x)  # Using x and y fields from ExecuteGraspRequest
+            grasp_req.y = int(pixel_y)
             grasp_req.force_top_down_grasp = goal.force_top_down_grasp
             grasp_req.force_horizontal_grasp = goal.force_horizontal_grasp
             grasp_req.force_45_angle_grasp = goal.force_45_angle_grasp
@@ -336,6 +347,7 @@ class SpotGraspActionServer:
                 
                 time.sleep(0.25)
             
+            # Return success status and grasp state
             success = feedback_resp.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED
             
             # Handle post-grasp actions

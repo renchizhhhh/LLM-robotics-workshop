@@ -2,12 +2,17 @@
 
 import rospy
 import actionlib
-from spot_hololens_llm_interface_msgs.msg import (
+from spot_hololens_llm_interface.msg import (
     GraspObjectAction, 
     GraspObjectGoal,
     InteractiveGraspAction,
-    InteractiveGraspGoal
+    InteractiveGraspGoal,
+    InteractiveGraspFeedback,
+    InteractiveGraspResult,
 )
+
+def feedback_cb(feedback: InteractiveGraspFeedback):
+    rospy.loginfo(f"[feedback] state={feedback.current_state} progress={feedback.progress} msg='{feedback.status_message}'")
 
 def test_direct_grasp():
     """Test direct grasp at specific pixel coordinates"""
@@ -17,7 +22,7 @@ def test_direct_grasp():
     client.wait_for_server()
     
     goal = GraspObjectGoal()
-    goal.image_source = 'frontright_fisheye_image'
+    goal.image_source = 'frontright_fisheye'
     goal.pixel_x = 320  # Example pixel coordinates
     goal.pixel_y = 240
     goal.force_top_down_grasp = True
@@ -33,25 +38,45 @@ def test_direct_grasp():
 
 def test_interactive_grasp():
     """Test interactive grasp with user click"""
-    rospy.loginfo("Testing interactive grasp...")
-    
     client = actionlib.SimpleActionClient('interactive_grasp', InteractiveGraspAction)
-    client.wait_for_server()
-    
+    rospy.loginfo("Waiting for interactive_grasp action server...")
+    if not client.wait_for_server(rospy.Duration(10.0)):
+        rospy.logerr("interactive_grasp action server not available")
+        return
+
     goal = InteractiveGraspGoal()
-    goal.image_source = 'frontright_fisheye_image'
+    # choose an image source the server supports, e.g. "hand_camera" or "front_fisheye"
+    goal.image_source = "frontright_fisheye_image"
+    # show_preview=True opens an OpenCV window on the server side for user click
     goal.show_preview = True
-    goal.window_title = 'Click on object to grasp'
-    goal.force_top_down_grasp = True
+    goal.window_title = "Click object to grasp"
     goal.return_to_initial_pose = True
-    
-    client.send_goal(goal)
-    result = client.wait_for_result()
-    
-    if result:
-        print(f"Interactive grasp result: {client.get_result()}")
+    # optional forcing flags
+    goal.force_top_down_grasp = False
+    goal.force_horizontal_grasp = False
+    goal.force_45_angle_grasp = False
+    goal.force_squeeze_grasp = False
+
+    rospy.loginfo("Sending interactive grasp goal (click in server window)...")
+    client.send_goal(goal, feedback_cb=feedback_cb)
+
+    # wait for result (increase timeout for long operations)
+    finished = client.wait_for_result(rospy.Duration(180.0))
+    if not finished:
+        rospy.logerr("Interactive grasp did not finish in time, cancelling")
+        client.cancel_goal()
+        return
+
+    result: InteractiveGraspResult = client.get_result()
+    if result is None:
+        rospy.logerr("No result received")
+        return
+
+    if result.success:
+        rospy.loginfo(f"Grasp succeeded state={result.grasp_state} selected_pixel=({result.selected_pixel_x},{result.selected_pixel_y})")
     else:
-        print("Interactive grasp failed or was cancelled")
+        rospy.logwarn(f"Grasp failed: {result.message}")
+
 
 if __name__ == '__main__':
     rospy.init_node('spot_grasp_test_client')

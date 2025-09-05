@@ -4,7 +4,7 @@
 Usage: run the SpotRobotManager node first (rosrun/roslaunch). Then run this
 script from the package or with the python interpreter in the ROS environment.
 
-This script calls: connect -> power_on -> stand -> move_to_position(body) -> sit -> power_off -> disconnect
+This script calls: connect -> power_on -> stand -> move_to_position(body) -> move_to_initial_position(odom) -> sit -> power_off -> disconnect
 It uses short durations and verifies service responses.
 """
 
@@ -14,10 +14,12 @@ from std_srvs.srv import Trigger
 from geometry_msgs.msg import Pose, Point, Quaternion
 
 try:
-    from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest
+    from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetInitialPose, GetInitialPoseRequest
 except Exception:
     MoveToPosition = None
     MoveToPositionRequest = None
+    GetInitialPose = None
+    GetInitialPoseRequest = None
 
 
 def wait_and_call(service_name, service_type, req=None, timeout=10.0):
@@ -37,57 +39,6 @@ def wait_and_call(service_name, service_type, req=None, timeout=10.0):
         rospy.logerr(f"Call to {service_name} failed: {e}")
         return None
 
-
-def _wait_for_feedback(cmd_client, command_id, est_duration):
-    """Wait for feedback from the robot after sending a command.
-
-    Args:
-        cmd_client: The command client to use.
-        command_id: The ID of the command to wait for.
-        est_duration: The estimated duration for the command to complete.
-
-    Returns:
-        bool: True if the command was successful, False otherwise.
-        str: The status message from the robot.
-    """
-    # Initialize the last status and start time
-    last_status = ""
-    last_status_name = ""
-    start_time = time.time()
-
-    # Wait for a status update or until the estimated duration has passed
-    while (time.time() - start_time) < est_duration:
-        # Get the latest status from the command client
-        try:
-            status = cmd_client.get_status(command_id)
-        except Exception as e:
-            rospy.logerr(f"Error getting status: {e}")
-            return False, str(e)
-
-        # If we have a new status, update the last status
-        if status != last_status:
-            last_status = status
-            last_status_name = status.upper()  # Convert to uppercase for comparison
-
-            # Log the status update
-            rospy.loginfo(f"Status update: {last_status_name}")
-
-            # Only return true for explicit success conditions
-            if ("SUCCESS" in last_status_name) or ("REACHED" in last_status_name) or ("COMPLETE" in last_status_name):
-                return True, last_status_name
-
-        # Sleep briefly before checking the status again
-        time.sleep(0.1)
-
-    # If we get NO_STATUS, consider it a failure
-    if last_status_name == "NO_STATUS":
-        return False, "NO_STATUS_FROM_ROBOT"
-
-    # If we timed out, log a warning and return False
-    rospy.logwarn("Timeout waiting for command feedback")
-    return False, "TIMEOUT"
-
-
 def main():
     rospy.init_node('test_real_spot_manager_client', anonymous=True)
 
@@ -99,6 +50,7 @@ def main():
     srv_stand = ns + '/stand'
     srv_sit = ns + '/sit'
     srv_move = ns + '/move_to_position'
+    srv_get_initial_pose = ns + '/get_initial_pose'
 
     # # 1) Connect
     # resp = wait_and_call(srv_connect, Trigger)
@@ -130,7 +82,7 @@ def main():
         req = MoveToPositionRequest()
         # Build a Pose: x forward, y left in body frame
         p = Pose()
-        p.position = Point(0.5, 0.0, 0.0)
+        p.position = Point(0.3, 0.1, 0.0)
         # identity orientation (no rotation)
         p.orientation = Quaternion(0.0, 0.0, 0.0, 1.0)
         req.target_pose = p
@@ -143,23 +95,43 @@ def main():
         else:
             rospy.loginfo(f"Move response: success={getattr(resp, 'success', False)} message='{getattr(resp, 'message', '')}'")
 
-    # 5) Sit
-    resp = wait_and_call(srv_sit, Trigger)
-    if not resp or not getattr(resp, 'success', False):
-        rospy.logwarn(f"Sit reported failure or uncertain: {resp}")
+    # 5) Get initial pose and move back to it
+    if GetInitialPose is not None:
+        req = GetInitialPoseRequest()
+        resp = wait_and_call(srv_get_initial_pose, GetInitialPose, req=req)
+        if resp and getattr(resp, 'success', False):
+            initial_pose = resp.initial_pose
+            move_req = MoveToPositionRequest()
+            move_req.target_pose = initial_pose.pose
+            move_req.frame_name = 'odom'
+            rospy.loginfo("Moving back to initial position in odom frame")
+            move_resp = wait_and_call(srv_move, MoveToPosition, req=move_req)
+            if not move_resp:
+                rospy.logerr("Move back to initial position failed")
+            else:
+                rospy.loginfo(f"Move back response: success={getattr(move_resp, 'success', False)} message='{getattr(move_resp, 'message', '')}'")
+        else:
+            rospy.logwarn("Failed to get initial pose")
     else:
-        rospy.loginfo("Robot sitting")
+        rospy.logwarn("GetInitialPose service not available")
 
-    # 6) Power off
-    resp = wait_and_call(srv_power_off, Trigger)
-    if not resp or not getattr(resp, 'success', False):
-        rospy.logwarn(f"Power off reported failure or uncertain: {resp}")
-    else:
-        rospy.loginfo("Robot powered off")
+    # 6) Sit
+    # resp = wait_and_call(srv_sit, Trigger)
+    # if not resp or not getattr(resp, 'success', False):
+    #     rospy.logwarn(f"Sit reported failure or uncertain: {resp}")
+    # else:
+    #     rospy.loginfo("Robot sitting")
 
-    # 7) Disconnect
-    resp = wait_and_call(ns + '/disconnect', Trigger)
-    rospy.loginfo(f"Disconnect response: {resp}")
+    # # 8) Power off
+    # resp = wait_and_call(srv_power_off, Trigger)
+    # if not resp or not getattr(resp, 'success', False):
+    #     rospy.logwarn(f"Power off reported failure or uncertain: {resp}")
+    # else:
+    #     rospy.loginfo("Robot powered off")
+
+    # # 9) Disconnect
+    # resp = wait_and_call(ns + '/disconnect', Trigger)
+    # rospy.loginfo(f"Disconnect response: {resp}")
 
 
 if __name__ == '__main__':

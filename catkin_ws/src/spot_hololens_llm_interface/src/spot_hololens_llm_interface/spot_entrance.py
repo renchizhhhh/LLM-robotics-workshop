@@ -100,6 +100,8 @@ class SpotRobotManager:
             self.verify_estop()
             
             self._lease_keepalive_running = True
+            # TODO: check if this is force take?
+            # self.lease_client.take()
             self.lease_keep_alive = bosdyn.client.lease.LeaseKeepAlive(
                 self.lease_client,
                 must_acquire=True,
