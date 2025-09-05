@@ -17,9 +17,10 @@ from std_srvs.srv import Trigger, TriggerResponse
 from std_msgs.msg import Bool, String
 
 from spot_hololens_llm_interface.spot_shared_services import SpotSharedServices
+from spot_hololens_llm_interface.spot_grasp_action_server import SpotGraspActionServer
 
 class SpotRobotManager:
-    def __init__(self, ready_for_command=True, start_services=True, dummy_mode=False):
+    def __init__(self, ready_for_command=True, start_services=True, arm_action_server=True, dummy_mode=False):
         # Get parameters
         self.dummy_mode = dummy_mode or rospy.get_param('~dummy_mode', False)
         self.hostname = rospy.get_param('~hostname', None)
@@ -91,12 +92,16 @@ class SpotRobotManager:
         if start_services:
             self.shared_services = SpotSharedServices(self)
 
+        if arm_action_server:
+            self.grasp_action_server = SpotGraspActionServer(self)
+
         if ready_for_command:
             self.handle_connect(None)
             self.handle_power_on(None)
 
-        rospy.loginfo(f"Spot Robot Manager initialized. Ready for commands: {ready_for_command}; Services started: {start_services}")
-    
+        rospy.loginfo(f"Spot Robot Manager initialized. Ready for commands: {ready_for_command}; "
+                      f"Services started: {start_services}; Arm action server: {arm_action_server}")
+
     def verify_estop(self):
         """Verify the robot is not estopped"""
         client = self.robot.ensure_client(bosdyn.client.estop.EstopClient.default_service_name)
@@ -131,6 +136,8 @@ class SpotRobotManager:
             self.verify_estop()
             
             self._lease_keepalive_running = True
+            # is force take safe?
+            self.lease_client.take()
             self.lease_keep_alive = bosdyn.client.lease.LeaseKeepAlive(
                 self.lease_client,
                 must_acquire=True,

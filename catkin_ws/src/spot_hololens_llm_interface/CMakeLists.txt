@@ -67,7 +67,6 @@ add_service_files(
     GetGraspFeedback.srv
     MoveToPosition.srv
     ArmCommand.srv
-    ExecuteGrasp.srv
 )
 
 ## Generate actions in the 'action' folder
