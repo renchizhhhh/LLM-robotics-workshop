@@ -7,14 +7,13 @@ import cv2
 import math
 
 from bosdyn.client.robot_command import RobotCommandBuilder, block_until_arm_arrives, block_for_trajectory_cmd
-from bosdyn.client.frame_helpers import get_se2_a_tform_b, ODOM_FRAME_NAME, BODY_FRAME_NAME, VISION_FRAME_NAME
-from bosdyn.api import geometry_pb2, image_pb2, manipulation_api_pb2, robot_command_pb2
+from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
+from bosdyn.api import geometry_pb2, image_pb2, robot_command_pb2
 
 from spot_hololens_llm_interface.srv import (
     GetImage, GetImageResponse,
     GetInitialPose, GetInitialPoseResponse, 
-    ExecuteGrasp, ExecuteGraspResponse,
-    GetGraspFeedback, GetGraspFeedbackResponse,
+    
     MoveToPosition, MoveToPositionResponse,
     ArmCommand, ArmCommandResponse
 )
@@ -59,8 +58,6 @@ class SpotSharedServices:
         # Setup robot operation services
         self.srv_get_image = rospy.Service('~get_image', GetImage, self.handle_get_image)
         self.srv_get_initial_pose = rospy.Service('~get_initial_pose', GetInitialPose, self.handle_get_initial_pose)
-        self.srv_execute_grasp = rospy.Service('~execute_grasp', ExecuteGrasp, self.handle_execute_grasp)
-        self.srv_get_grasp_feedback = rospy.Service('~get_grasp_feedback', GetGraspFeedback, self.handle_get_grasp_feedback)
         self.srv_move_to_position = rospy.Service('~move_to_position', MoveToPosition, self.handle_move_to_position)
         self.srv_arm_command = rospy.Service('~arm_command', ArmCommand, self.handle_arm_command)
         
@@ -155,88 +152,6 @@ class SpotSharedServices:
             
         return response
     
-    def handle_execute_grasp(self, req):
-        """Execute grasp command using robot's manipulation API"""
-        response = ExecuteGraspResponse()
-
-        response.success = True
-        response.message = f"Skipping the grasp for debug. The request is: {req}."
-        return response
-
-        try:
-            clients = self.robot_manager.get_clients()
-            if not clients or not clients['manipulation_api']:
-                response.success = False
-                response.message = "Robot not connected or manipulation client not available"
-                return response
-            
-            pick_vec = geometry_pb2.Vec2(x=req.x, y=req.y)
-            # Build grasp request
-            grasp = manipulation_api_pb2.PickObjectInImage(
-                pixel_xy=pick_vec,
-                # transforms_snapshot_for_camera=req.transforms_snapshot,  # TODO: Convert from ROS
-                frame_name_image_sensor=req.frame_name_image_sensor,
-                # camera_model=req.camera_model  # TODO: Convert from ROS CameraInfo
-            )
-            
-            # Add grasp constraints
-            grasp.grasp_params.grasp_params_frame_name = VISION_FRAME_NAME
-            
-            if req.force_top_down_grasp:
-                axis_on_gripper = geometry_pb2.Vec3(x=1, y=0, z=0)
-                axis_to_align_with = geometry_pb2.Vec3(x=0, y=0, z=-1)
-                constraint = grasp.grasp_params.allowable_orientation.add()
-                constraint.vector_alignment_with_tolerance.axis_on_gripper_ewrt_gripper.CopyFrom(axis_on_gripper)
-                constraint.vector_alignment_with_tolerance.axis_to_align_with_ewrt_frame.CopyFrom(axis_to_align_with)
-                constraint.vector_alignment_with_tolerance.threshold_radians = 0.17
-            # TODO: Add other constraint types
-            
-            # Send grasp request
-            grasp_request = manipulation_api_pb2.ManipulationApiRequest(pick_object_in_image=grasp)
-            cmd_response = clients['manipulation_api'].manipulation_api_command(
-                manipulation_api_request=grasp_request
-            )
-            
-            response.success = True
-            response.message = "Grasp command sent successfully"
-            response.manipulation_cmd_id = cmd_response.manipulation_cmd_id
-            return response
-            
-        except Exception as e:
-            response.success = False
-            response.message = f"Failed to execute grasp: {str(e)}"
-            return response
-    
-    def handle_get_grasp_feedback(self, req):
-        """Get feedback for ongoing grasp operation"""
-        response = GetGraspFeedbackResponse()
-        
-        try:
-            clients = self.robot_manager.get_clients()
-            if not clients or not clients['manipulation_api']:
-                response.success = False
-                response.message = "Robot not connected or manipulation client not available"
-                return response
-                
-            feedback_request = manipulation_api_pb2.ManipulationApiFeedbackRequest(
-                manipulation_cmd_id=req.manipulation_cmd_id
-            )
-            
-            feedback_response = clients['manipulation_api'].manipulation_api_feedback_command(
-                manipulation_api_feedback_request=feedback_request
-            )
-            
-            response.success = True
-            response.message = "Feedback retrieved successfully"
-            response.current_state = feedback_response.current_state
-            response.state_name = manipulation_api_pb2.ManipulationFeedbackState.Name(feedback_response.current_state)
-            return response
-            
-        except Exception as e:
-            response.success = False
-            response.message = f"Failed to get grasp feedback: {str(e)}"
-            return response
-    
     def handle_move_to_position(self, req):
         """Move robot to specified position (uses trajectory commands)
 
@@ -321,8 +236,8 @@ class SpotSharedServices:
                 return _apply_move_result(response, True, status_name, frame, bx, by, byaw)
 
 
-            elif frame in ("odom", "map"):
-                # Build SE2 pose in odom/map frame
+            elif frame in ("odom", "vision"):
+                # Build SE2 pose in odom/vision frame
                 se2 = geometry_pb2.SE2Pose(
                     position=geometry_pb2.Vec2(x=tx, y=ty),
                     angle=tyaw

@@ -8,48 +8,27 @@ import actionlib
 import threading
 
 from spot_hololens_llm_interface.msg import (
-    GraspObjectAction, 
-    GraspObjectGoal, 
-    GraspObjectResult, 
-    GraspObjectFeedback,
     InteractiveGraspAction,
     InteractiveGraspGoal,
     InteractiveGraspResult,
     InteractiveGraspFeedback
 )
 
-from spot_hololens_llm_interface.srv import (
-    GetImage, GetImageRequest,
-    GetInitialPose, GetInitialPoseRequest,
-    ExecuteGrasp, ExecuteGraspRequest,
-    GetGraspFeedback, GetGraspFeedbackRequest,
-    MoveToPosition, MoveToPositionRequest,
-    ArmCommand, ArmCommandRequest
-)
-
-from bosdyn.api import geometry_pb2, manipulation_api_pb2
+from bosdyn.api import geometry_pb2, manipulation_api_pb2, image_pb2
+from bosdyn.client.frame_helpers import VISION_FRAME_NAME
 from cv_bridge import CvBridge
 
 
 class SpotGraspActionServer:
-    def __init__(self):
-        # Wait for spot_entrance node to be available
-        rospy.loginfo("Waiting for spot_entrance services...")
-        try:
-            rospy.wait_for_service('/spot_entrance/connect', timeout=30)
-            rospy.wait_for_service('/spot_entrance/get_image', timeout=30)
-            rospy.wait_for_service('/spot_entrance/execute_grasp', timeout=30)
-        except rospy.ROSException:
-            rospy.logerr("Spot entrance services not available!")
-            raise
+    def __init__(self, robot_manager):
+        """
+        Initialize the grasp action server with direct access to robot manager.
         
-        # Create service proxies
-        self.get_image_srv = rospy.ServiceProxy('/spot_entrance/get_image', GetImage)
-        self.get_initial_pose_srv = rospy.ServiceProxy('/spot_entrance/get_initial_pose', GetInitialPose)
-        self.execute_grasp_srv = rospy.ServiceProxy('/spot_entrance/execute_grasp', ExecuteGrasp)
-        self.get_grasp_feedback_srv = rospy.ServiceProxy('/spot_entrance/get_grasp_feedback', GetGraspFeedback)
-        self.move_to_position_srv = rospy.ServiceProxy('/spot_entrance/move_to_position', MoveToPosition)
-        self.arm_command_srv = rospy.ServiceProxy('/spot_entrance/arm_command', ArmCommand)
+        Args:
+            robot_manager: Instance of SpotRobotManager for direct robot access
+        """
+        # Store robot manager for direct access
+        self.robot_manager = robot_manager
         
         # CV bridge for image processing
         self.cv_bridge = CvBridge()
@@ -58,17 +37,9 @@ class SpotGraspActionServer:
         self.image_click = None
         self.image_display = None
         self.click_event = threading.Event()
-        # currently open OpenCV window name (to avoid creating multiple windows)
         self.window_name = None
         
-        # Action servers
-        # self.grasp_server = actionlib.SimpleActionServer(
-        #     'grasp_object', 
-        #     GraspObjectAction, 
-        #     execute_cb=self.execute_grasp_cb, 
-        #     auto_start=False
-        # )
-        
+        # Action server for interactive grasping
         self.interactive_grasp_server = actionlib.SimpleActionServer(
             'interactive_grasp', 
             InteractiveGraspAction, 
@@ -76,76 +47,8 @@ class SpotGraspActionServer:
             auto_start=False
         )
         
-        # self.grasp_server.start()
         self.interactive_grasp_server.start()
-        
-        rospy.loginfo("Spot grasp action servers started")
-    
-    # def execute_grasp_cb(self, goal):
-    #     """Execute grasp with specified pixel coordinates"""
-    #     rospy.loginfo(f"Executing grasp at pixel ({goal.pixel_x}, {goal.pixel_y})")
-        
-    #     result = GraspObjectResult()
-    #     feedback = GraspObjectFeedback()
-        
-    #     try:
-    #         # Store initial pose if requested
-    #         initial_pose = None
-    #         if goal.return_to_initial_pose:
-    #             pose_resp = self.get_initial_pose_srv(GetInitialPoseRequest())
-    #             if pose_resp.success:
-    #                 initial_pose = pose_resp.initial_pose
-    #             else:
-    #                 rospy.logwarn(f"Failed to get initial pose: {pose_resp.message}")
-            
-    #         # Get image from specified source
-    #         feedback.current_state = "ACQUIRING_IMAGE"
-    #         feedback.progress = 0.1
-    #         feedback.status_message = f"Getting image from {goal.image_source}"
-    #         self.grasp_server.publish_feedback(feedback)
-            
-    #         image_req = GetImageRequest()
-    #         image_req.image_source = goal.image_source
-    #         image_resp = self.get_image_srv(image_req)
-            
-    #         if not image_resp.success:
-    #             result.success = False
-    #             result.message = f"Failed to get image: {image_resp.message}"
-    #             self.grasp_server.set_aborted(result)
-    #             return
-            
-    #         # Execute grasp
-    #         feedback.current_state = "EXECUTING_GRASP"
-    #         feedback.progress = 0.3
-    #         feedback.status_message = "Executing grasp command"
-    #         self.grasp_server.publish_feedback(feedback)
-            
-    #         success, grasp_state = self._execute_grasp_at_pixel(
-    #             goal.pixel_x, goal.pixel_y, image_resp, goal, feedback
-    #         )
-            
-    #         # Return to initial pose if requested and successful
-    #         if success and goal.return_to_initial_pose and initial_pose:
-    #             feedback.current_state = "RETURNING_TO_INITIAL_POSE"
-    #             feedback.progress = 0.9
-    #             feedback.status_message = "Returning to initial position"
-    #             self.grasp_server.publish_feedback(feedback)
-    #             self._return_to_initial_pose(initial_pose)
-            
-    #         result.success = success
-    #         result.grasp_state = grasp_state
-    #         result.message = "Grasp completed successfully" if success else "Grasp failed"
-            
-    #         if success:
-    #             self.grasp_server.set_succeeded(result)
-    #         else:
-    #             self.grasp_server.set_aborted(result)
-                
-    #     except Exception as e:
-    #         rospy.logerr(f"Grasp action failed: {e}")
-    #         result.success = False
-    #         result.message = f"Exception during grasp: {str(e)}"
-    #         self.grasp_server.set_aborted(result)
+        rospy.loginfo("Spot grasp action server started with direct robot manager access")
     
     def execute_interactive_grasp_cb(self, goal):
         """Execute interactive grasp with user clicking on image"""
@@ -155,36 +58,64 @@ class SpotGraspActionServer:
         feedback = InteractiveGraspFeedback()
         
         try:
+            # Verify we have necessary clients
+            clients = self.robot_manager.get_clients()
+            if not clients or not clients['image'] or not clients['manipulation_api']:
+                result.success = False
+                result.message = "Robot not connected or required clients not available"
+                self.interactive_grasp_server.set_aborted(result)
+                return
+            
             # Store initial pose if requested
             initial_pose = None
             if goal.return_to_initial_pose:
-                pose_resp = self.get_initial_pose_srv(GetInitialPoseRequest())
-                if pose_resp.success:
-                    initial_pose = pose_resp.initial_pose
+                if self.robot_manager.initial_pose is not None:
+                    from geometry_msgs.msg import PoseStamped
+                    import tf.transformations
+                    
+                    # Convert SE2 pose to PoseStamped
+                    initial_pose = PoseStamped()
+                    initial_pose.header.frame_id = "odom"
+                    initial_pose.header.stamp = rospy.Time.now()
+                    initial_pose.pose.position.x = self.robot_manager.initial_pose.x
+                    initial_pose.pose.position.y = self.robot_manager.initial_pose.y
+                    initial_pose.pose.position.z = 0.0
+                    
+                    # Convert angle to quaternion
+                    quat = tf.transformations.quaternion_from_euler(0, 0, self.robot_manager.initial_pose.angle)
+                    initial_pose.pose.orientation.x = quat[0]
+                    initial_pose.pose.orientation.y = quat[1]
+                    initial_pose.pose.orientation.z = quat[2]
+                    initial_pose.pose.orientation.w = quat[3]
                 else:
-                    rospy.logwarn(f"Failed to get initial pose: {pose_resp.message}")
+                    rospy.logwarn("No initial pose available for return to initial pose")
             
-            # Get image from specified source
+            # Get image directly from the robot
             feedback.current_state = "ACQUIRING_IMAGE"
             feedback.progress = 0.1
             feedback.status_message = f"Getting image from {goal.image_source}"
             self.interactive_grasp_server.publish_feedback(feedback)
             
-            image_req = GetImageRequest()
-            image_req.image_source = goal.image_source
-            image_resp = self.get_image_srv(image_req)
-            
-            if not image_resp.success:
+            image_responses = clients['image'].get_image_from_sources([goal.image_source])
+            if len(image_responses) != 1:
                 result.success = False
-                result.message = f"Failed to get image: {image_resp.message}"
+                result.message = f"Invalid number of images: {len(image_responses)}"
                 self.interactive_grasp_server.set_aborted(result)
                 return
             
-            # Process image for display
+            image = image_responses[0]
+            if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
+                dtype = np.uint16
+            else:
+                dtype = np.uint8
+            img = np.fromstring(image.shot.image.data, dtype=dtype)
+            if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
+                img = img.reshape(image.shot.image.rows, image.shot.image.cols)
+            else:
+                img = cv2.imdecode(img, -1)
+            
+            # Process image for display if requested
             if goal.show_preview:
-                # Convert ROS image to OpenCV
-                cv_image = self.cv_bridge.imgmsg_to_cv2(image_resp.image, "bgr8")
-                
                 # Show image and wait for user click
                 feedback.current_state = "WAITING_FOR_USER_INPUT"
                 feedback.progress = 0.2
@@ -193,12 +124,11 @@ class SpotGraspActionServer:
                 self.interactive_grasp_server.publish_feedback(feedback)
                 
                 window_title = goal.window_title if goal.window_title else 'Click to grasp'
-                # store and use a single window name so mouse callback doesn't create another window
                 self.window_name = window_title
                 cv2.namedWindow(self.window_name)
                 cv2.setMouseCallback(self.window_name, self._mouse_callback)
                 
-                self.image_display = cv_image
+                self.image_display = img
                 self.image_click = None
                 self.click_event.clear()
                 
@@ -226,7 +156,6 @@ class SpotGraspActionServer:
                     time.sleep(0.1)
                 
                 cv2.destroyAllWindows()
-                # clear stored window name after destroying windows
                 self.window_name = None
                 
                 if self.image_click is None:
@@ -251,8 +180,9 @@ class SpotGraspActionServer:
             feedback.status_message = f"Executing grasp at pixel ({pixel_x}, {pixel_y})"
             self.interactive_grasp_server.publish_feedback(feedback)
             
-            success, grasp_state = self._execute_grasp_at_pixel(
-                pixel_x, pixel_y, image_resp, goal, feedback
+            # Execute the grasp using direct access to manipulation API
+            success, grasp_state = self._execute_grasp_at_pixel_direct(
+                pixel_x, pixel_y, image, goal, feedback
             )
             
             # Return to initial pose if requested and successful
@@ -261,7 +191,7 @@ class SpotGraspActionServer:
                 feedback.progress = 0.9
                 feedback.status_message = "Returning to initial position"
                 self.interactive_grasp_server.publish_feedback(feedback)
-                self._return_to_initial_pose(initial_pose)
+                self._return_to_initial_pose_direct(initial_pose)
             
             result.success = success
             result.grasp_state = grasp_state
@@ -292,112 +222,162 @@ class SpotGraspActionServer:
                 height, width = clone.shape[:2]
                 cv2.line(clone, (0, y), (width, y), color, thickness)
                 cv2.line(clone, (x, 0), (x, height), color, thickness)
-                # reuse the active window name if available to avoid creating new windows
                 win = self.window_name if hasattr(self, 'window_name') and self.window_name else 'Click to grasp'
                 cv2.imshow(win, clone)
     
-    def _execute_grasp_at_pixel(self, pixel_x, pixel_y, image_response, goal, feedback):
-        """Execute the actual grasp at specified pixel coordinates"""
+    def _execute_grasp_at_pixel_direct(self, pixel_x, pixel_y, image, goal, feedback):
+        """Execute grasp directly using manipulation API client"""
         try:
-            # Build the grasp request
-            grasp_req = ExecuteGraspRequest()
-            grasp_req.x = int(pixel_x)  # Using x and y fields from ExecuteGraspRequest
-            grasp_req.y = int(pixel_y)
-            grasp_req.force_top_down_grasp = goal.force_top_down_grasp
-            grasp_req.force_horizontal_grasp = goal.force_horizontal_grasp
-            grasp_req.force_45_angle_grasp = goal.force_45_angle_grasp
-            grasp_req.force_squeeze_grasp = goal.force_squeeze_grasp
-            grasp_req.transforms_snapshot = image_response.transforms
-            grasp_req.frame_name_image_sensor = image_response.frame_name_image_sensor
-            grasp_req.camera_model = image_response.camera_info
-            
-            # Send grasp request
-            grasp_resp = self.execute_grasp_srv(grasp_req)
-            if not grasp_resp.success:
+            clients = self.robot_manager.get_clients()
+            if not clients or not clients['manipulation_api']:
+                rospy.logerr("Manipulation API client not available")
                 return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
             
-            manipulation_cmd_id = grasp_resp.manipulation_cmd_id
+            # Create the grasp vector from pixel coordinates
+            pick_vec = geometry_pb2.Vec2(x=pixel_x, y=pixel_y)
+            
+            # Build grasp request
+            grasp = manipulation_api_pb2.PickObjectInImage(
+                pixel_xy=pick_vec,
+                transforms_snapshot_for_camera=image.shot.transforms_snapshot,
+                frame_name_image_sensor=image.shot.frame_name_image_sensor,
+                camera_model=image.source.pinhole
+            )
+            
+            # Add grasp constraints based on goal parameters
+            grasp.grasp_params.grasp_params_frame_name = VISION_FRAME_NAME
+            
+            if goal.force_top_down_grasp:
+                axis_on_gripper = geometry_pb2.Vec3(x=1, y=0, z=0)
+                axis_to_align_with = geometry_pb2.Vec3(x=0, y=0, z=-1)
+                constraint = grasp.grasp_params.allowable_orientation.add()
+                constraint.vector_alignment_with_tolerance.axis_on_gripper_ewrt_gripper.CopyFrom(axis_on_gripper)
+                constraint.vector_alignment_with_tolerance.axis_to_align_with_ewrt_frame.CopyFrom(axis_to_align_with)
+                constraint.vector_alignment_with_tolerance.threshold_radians = 0.17
+                feedback.current_state = "ADDING_TOP_DOWN_CONSTRAINT"
+                feedback.progress = 0.6
+                feedback.status_message = "Returning to initial position"
+                
+            elif goal.force_horizontal_grasp:
+                axis_on_gripper = geometry_pb2.Vec3(x=0, y=1, z=0)
+                axis_to_align_with = geometry_pb2.Vec3(x=0, y=0, z=1)
+                constraint = grasp.grasp_params.allowable_orientation.add()
+                constraint.vector_alignment_with_tolerance.axis_on_gripper_ewrt_gripper.CopyFrom(axis_on_gripper)
+                constraint.vector_alignment_with_tolerance.axis_to_align_with_ewrt_frame.CopyFrom(axis_to_align_with)
+                constraint.vector_alignment_with_tolerance.threshold_radians = 0.17
+                
+            elif goal.force_squeeze_grasp:
+                constraint = grasp.grasp_params.allowable_orientation.add()
+                constraint.squeeze_grasp.SetInParent()
+            
+            # Send grasp request
+            grasp_request = manipulation_api_pb2.ManipulationApiRequest(pick_object_in_image=grasp)
+            cmd_response = clients['manipulation_api'].manipulation_api_command(
+                manipulation_api_request=grasp_request
+            )
+            
+            manipulation_cmd_id = cmd_response.manipulation_cmd_id
             
             # Monitor grasp progress
             while True:
-                if self.grasp_server and self.grasp_server.is_preempt_requested():
+                # TODO: check the set_preempted() method? Maybe it's needed to cancel the action properly
+                if self.interactive_grasp_server.is_preempt_requested():
                     return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
-                if self.interactive_grasp_server and self.interactive_grasp_server.is_preempt_requested():
-                    return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
                 
-                feedback_req = GetGraspFeedbackRequest()
-                feedback_req.manipulation_cmd_id = manipulation_cmd_id
-                feedback_resp = self.get_grasp_feedback_srv(feedback_req)
+                feedback_request = manipulation_api_pb2.ManipulationApiFeedbackRequest(
+                    manipulation_cmd_id=manipulation_cmd_id
+                )
                 
-                if not feedback_resp.success:
-                    rospy.logerr(f"Failed to get grasp feedback: {feedback_resp.message}")
-                    break
+                api_feedback_response = clients['manipulation_api'].manipulation_api_feedback_command(
+                    manipulation_api_feedback_request=feedback_request
+                )
                 
-                feedback.current_state = f"GRASP_{feedback_resp.state_name}"
-                feedback.status_message = f"Manipulation state: {feedback_resp.state_name}"
+                feedback.current_state = f"GRASP_{manipulation_api_pb2.ManipulationFeedbackState.Name(api_feedback_response.current_state)}"
+                feedback.status_message = f"Manipulation state: {manipulation_api_pb2.ManipulationFeedbackState.Name(api_feedback_response.current_state)}"
+                self.interactive_grasp_server.publish_feedback(feedback)
                 
-                if hasattr(self, 'grasp_server') and self.grasp_server.is_active():
-                    self.grasp_server.publish_feedback(feedback)
-                elif hasattr(self, 'interactive_grasp_server') and self.interactive_grasp_server.is_active():
-                    self.interactive_grasp_server.publish_feedback(feedback)
-                
-                if (feedback_resp.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED or 
-                    feedback_resp.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_FAILED):
+                if (api_feedback_response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED or 
+                    api_feedback_response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_FAILED):
                     break
                 
                 time.sleep(0.25)
             
             # Return success status and grasp state
-            success = feedback_resp.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED
+            success = api_feedback_response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED
             
             # Handle post-grasp actions
             if success:
-                self._handle_successful_grasp()
+                self._handle_successful_grasp_direct()
             
-            return success, feedback_resp.current_state
+            return success, api_feedback_response.current_state
             
         except Exception as e:
             rospy.logerr(f"Grasp execution failed: {e}")
             return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
     
-    def _handle_successful_grasp(self):
-        """Handle actions after a successful grasp (like opening gripper)"""
+    def _handle_successful_grasp_direct(self):
+        """Handle post-grasp actions using direct robot commands"""
         try:
+            from bosdyn.client.robot_command import RobotCommandBuilder
+            
+            clients = self.robot_manager.get_clients()
+            cmd_client = clients['command']
+            
             # Open gripper to release object
-            arm_req = ArmCommandRequest()
-            arm_req.command_type = "open"
-            self.arm_command_srv(arm_req)
+            open_cmd = RobotCommandBuilder.claw_gripper_open_command()
+            cmd_client.robot_command(open_cmd, end_time_secs=time.time() + 2)
             time.sleep(1.5)
             
             # Raise arm to carry position
-            arm_req.command_type = "carry"
-            self.arm_command_srv(arm_req)
+            carry_cmd = RobotCommandBuilder.arm_carry_command()
+            cmd_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
             time.sleep(2.0)
             
             # Close gripper
-            arm_req.command_type = "close"
-            self.arm_command_srv(arm_req)
+            close_cmd = RobotCommandBuilder.claw_gripper_close_command()
+            cmd_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
             time.sleep(1.5)
             
         except Exception as e:
             rospy.logerr(f"Failed to handle successful grasp: {e}")
     
-    def _return_to_initial_pose(self, initial_pose):
-        """Return robot to initial pose and stow arm"""
+    def _return_to_initial_pose_direct(self, initial_pose):
+        """Return robot to initial pose using direct commands"""
         try:
+            from bosdyn.client.robot_command import RobotCommandBuilder
+            from tf.transformations import euler_from_quaternion
+            
+            clients = self.robot_manager.get_clients()
+            cmd_client = clients['command']
+            
             # Stow the arm
-            arm_req = ArmCommandRequest()
-            arm_req.command_type = "stow"
-            self.arm_command_srv(arm_req)
+            stow_cmd = RobotCommandBuilder.arm_stow_command()
+            cmd_client.robot_command(stow_cmd, end_time_secs=time.time() + 3)
             time.sleep(2.0)
             
-            # Move back to initial pose
-            move_req = MoveToPositionRequest()
-            move_req.target_pose = initial_pose.pose
-            move_req.frame_name = initial_pose.header.frame_id
-            move_resp = self.move_to_position_srv(move_req)
-            if not move_resp.success:
-                rospy.logwarn(f"Failed to return to initial pose: {move_resp.message}")
+            # Extract pose parameters
+            tx = initial_pose.pose.position.x
+            ty = initial_pose.pose.position.y
+            quat = (
+                initial_pose.pose.orientation.x,
+                initial_pose.pose.orientation.y,
+                initial_pose.pose.orientation.z,
+                initial_pose.pose.orientation.w
+            )
+            _, _, tyaw = euler_from_quaternion(quat)
+            
+            # Build SE2 pose
+            from bosdyn.api import geometry_pb2
+            from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
+            
+            se2 = geometry_pb2.SE2Pose(
+                position=geometry_pb2.Vec2(x=tx, y=ty),
+                angle=tyaw
+            )
+            
+            # Move back to initial position
+            move_cmd = RobotCommandBuilder.synchro_se2_trajectory_command(se2, ODOM_FRAME_NAME)
+            cmd_client.robot_command(move_cmd, end_time_secs=time.time() + 10)
                     
         except Exception as e:
             rospy.logerr(f"Failed to return to initial pose: {e}")
@@ -405,6 +385,15 @@ class SpotGraspActionServer:
 
 if __name__ == '__main__':
     rospy.init_node('spot_grasp_action_server')
-    server = SpotGraspActionServer()
-    rospy.loginfo("Spot grasp action server running...")
+    
+    # Import robot manager
+    from spot_hololens_llm_interface.spot_entrance import SpotRobotManager
+    
+    # Create the robot manager first
+    robot_manager = SpotRobotManager(ready_for_command=True, start_services=False)
+    
+    # Pass the robot manager to the action server
+    server = SpotGraspActionServer(robot_manager)
+    
+    rospy.loginfo("Spot grasp action server running with direct robot manager access...")
     rospy.spin()

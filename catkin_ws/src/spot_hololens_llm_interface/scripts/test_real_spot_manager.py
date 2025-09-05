@@ -69,11 +69,11 @@ def main():
     # rospy.loginfo("Robot powered on")
 
     # 3) Stand
-    resp = wait_and_call(srv_stand, Trigger)
-    if not resp or not getattr(resp, 'success', False):
-        rospy.logwarn(f"Stand reported failure or uncertain: {resp}")
-    else:
-        rospy.loginfo("Robot standing")
+    # resp = wait_and_call(srv_stand, Trigger)
+    # if not resp or not getattr(resp, 'success', False):
+    #     rospy.logwarn(f"Stand reported failure or uncertain: {resp}")
+    # else:
+    #     rospy.loginfo("Robot standing")
 
     # 4) Move: send a small forward body-frame step (0.5 m)
     if MoveToPosition is None:
@@ -82,9 +82,10 @@ def main():
         req = MoveToPositionRequest()
         # Build a Pose: x forward, y left in body frame
         p = Pose()
-        p.position = Point(0.3, 0.1, 0.0)
+        p.position = Point(0.0, 0.0, 0.0)
         # identity orientation (no rotation)
-        p.orientation = Quaternion(0.0, 0.0, 0.0, 1.0)
+
+        p.orientation = Quaternion(0.0, 0.0, 0.258819, 0.9659258) # 30 degrees yaw
         req.target_pose = p
         req.frame_name = 'body'
 
@@ -96,24 +97,24 @@ def main():
             rospy.loginfo(f"Move response: success={getattr(resp, 'success', False)} message='{getattr(resp, 'message', '')}'")
 
     # 5) Get initial pose and move back to it
-    if GetInitialPose is not None:
-        req = GetInitialPoseRequest()
-        resp = wait_and_call(srv_get_initial_pose, GetInitialPose, req=req)
-        if resp and getattr(resp, 'success', False):
-            initial_pose = resp.initial_pose
-            move_req = MoveToPositionRequest()
-            move_req.target_pose = initial_pose.pose
-            move_req.frame_name = 'odom'
-            rospy.loginfo("Moving back to initial position in odom frame")
-            move_resp = wait_and_call(srv_move, MoveToPosition, req=move_req)
-            if not move_resp:
-                rospy.logerr("Move back to initial position failed")
-            else:
-                rospy.loginfo(f"Move back response: success={getattr(move_resp, 'success', False)} message='{getattr(move_resp, 'message', '')}'")
-        else:
-            rospy.logwarn("Failed to get initial pose")
-    else:
-        rospy.logwarn("GetInitialPose service not available")
+    # if GetInitialPose is not None:
+    #     req = GetInitialPoseRequest()
+    #     resp = wait_and_call(srv_get_initial_pose, GetInitialPose, req=req)
+    #     if resp and getattr(resp, 'success', False):
+    #         initial_pose = resp.initial_pose
+    #         move_req = MoveToPositionRequest()
+    #         move_req.target_pose = initial_pose.pose
+    #         move_req.frame_name = 'odom'
+    #         rospy.loginfo("Moving back to initial position in odom frame")
+    #         move_resp = wait_and_call(srv_move, MoveToPosition, req=move_req)
+    #         if not move_resp:
+    #             rospy.logerr("Move back to initial position failed")
+    #         else:
+    #             rospy.loginfo(f"Move back response: success={getattr(move_resp, 'success', False)} message='{getattr(move_resp, 'message', '')}'")
+    #     else:
+    #         rospy.logwarn("Failed to get initial pose")
+    # else:
+    #     rospy.logwarn("GetInitialPose service not available")
 
     # 6) Sit
     # resp = wait_and_call(srv_sit, Trigger)
