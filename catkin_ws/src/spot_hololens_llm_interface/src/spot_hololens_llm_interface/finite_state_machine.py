@@ -4,7 +4,7 @@ import rospy
 import math
 from statemachine import StateMachine, State
 from std_srvs.srv import Trigger
-from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest
+from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest, GetInitialPose, GetInitialPoseRequest, ArmCommand, ArmCommandRequest
 
 class SpotStateMachine(StateMachine):
     """
@@ -27,6 +27,8 @@ class SpotStateMachine(StateMachine):
     start_moving = (stand.to(moving) | moving.to(moving))
     stop_moving = moving.to(stand)
     get_image = (stand.to(stand) | moving.to(moving) | sit.to(sit))
+    get_initial_pose = (stand.to(stand) | moving.to(moving) | sit.to(sit))
+    arm_command = (stand.to(stand) | moving.to(moving))
     power_off_from_stand = stand.to(powered_off)
     power_off_from_sit = sit.to(powered_off)
     disconnect = powered_off.to(disconnected)
@@ -47,6 +49,8 @@ class SpotStateMachine(StateMachine):
         self.sit_srv = rospy.ServiceProxy('/spot_entrance/sit', Trigger)
         self.move_srv = rospy.ServiceProxy('/spot_entrance/move_to_position', MoveToPosition)
         self.get_image_srv = rospy.ServiceProxy('/spot_entrance/get_image', GetImage)
+        self.get_initial_pose_srv = rospy.ServiceProxy('/spot_entrance/get_initial_pose', GetInitialPose)
+        self.arm_command_srv = rospy.ServiceProxy('/spot_entrance/arm_command', ArmCommand)
         self.power_off_srv = rospy.ServiceProxy('/spot_entrance/power_off', Trigger)
         self.disconnect_srv = rospy.ServiceProxy('/spot_entrance/disconnect', Trigger)
         
@@ -95,6 +99,18 @@ class SpotStateMachine(StateMachine):
         rospy.loginfo(f"FSM: Getting image from {image_source}")
         self._call_get_image_service(image_source)
 
+    def on_enter_get_initial_pose(self):
+        rospy.loginfo("FSM: Getting initial pose")
+        self._call_get_initial_pose_service()
+
+    def on_enter_arm_command(self):
+        # Get command type from kwargs, default to "stow"
+        kwargs = getattr(self, '_current_kwargs', {})
+        command_type = kwargs.get('command_type', 'stow')
+        
+        rospy.loginfo(f"FSM: Executing arm command: {command_type}")
+        self._call_arm_command_service(command_type)
+
     def on_enter_powered_off_from_stand(self):
         rospy.loginfo("FSM: Powering off robot")
         self._call_service(self.power_off_srv, "Power off")
@@ -128,6 +144,37 @@ class SpotStateMachine(StateMachine):
         except Exception as e:
             mode_text = " (dummy)" if self.dummy_mode else ""
             rospy.logerr(f"FSM: Image service call failed{mode_text}: {e}")
+
+    def _call_get_initial_pose_service(self):
+        """Helper to call get initial pose service"""
+        try:
+            req = GetInitialPoseRequest()
+            resp = self.get_initial_pose_srv(req)
+            if resp.success:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.loginfo(f"FSM: Initial pose retrieved successfully{mode_text}")
+            else:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.logerr(f"FSM: Failed to get initial pose{mode_text}: {resp.message}")
+        except Exception as e:
+            mode_text = " (dummy)" if self.dummy_mode else ""
+            rospy.logerr(f"FSM: Initial pose service call failed{mode_text}: {e}")
+
+    def _call_arm_command_service(self, command_type):
+        """Helper to call arm command service"""
+        try:
+            req = ArmCommandRequest()
+            req.command_type = command_type
+            resp = self.arm_command_srv(req)
+            if resp.success:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.loginfo(f"FSM: Arm command '{command_type}' successful{mode_text}")
+            else:
+                mode_text = " (dummy)" if self.dummy_mode else ""
+                rospy.logerr(f"FSM: Arm command '{command_type}' failed{mode_text}: {resp.message}")
+        except Exception as e:
+            mode_text = " (dummy)" if self.dummy_mode else ""
+            rospy.logerr(f"FSM: Arm command service call failed{mode_text}: {e}")
 
     # Helper methods
     def _call_service(self, service, name):
