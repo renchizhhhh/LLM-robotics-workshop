@@ -19,7 +19,6 @@ try:
 except Exception:
     rospy = None
 
-import bosdyn.api.gripper_command_pb2
 import bosdyn.client
 import bosdyn.client.lease
 import bosdyn.client.util

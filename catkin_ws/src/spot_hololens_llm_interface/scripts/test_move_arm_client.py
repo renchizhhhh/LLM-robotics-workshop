@@ -5,15 +5,15 @@ import actionlib
 from spot_hololens_llm_interface.msg import MoveArmPoseAction, MoveArmPoseGoal
 
 
-def send_goal(client, x, y, z, qw, qx, qy, qz, duration=2.0, open_gripper=False, timeout_extra=10.0):
+def send_goal(client, x, y, z, qx, qy, qz, qw, duration=2.0, open_gripper=False, timeout_extra=10.0):
     goal = MoveArmPoseGoal()
     goal.x = x
     goal.y = y
     goal.z = z
-    goal.qw = qw
     goal.qx = qx
     goal.qy = qy
     goal.qz = qz
+    goal.qw = qw
     goal.duration = duration
     goal.open_gripper = open_gripper
 
@@ -41,7 +41,7 @@ def main():
 
     # Pose parameters copied from pose_grasp_node: hold pose then releasing pose
     # Hold pose (approximate): x=0.75, y=0, z=0.25, identity quaternion
-    res1 = send_goal(client, 0.75, 0.0, 0.25, 1.0, 0.0, 0.0, 0.0, duration=2.0, open_gripper=True)
+    res1 = send_goal(client, 0.9, -0.35, 0.35, 0.67, 0.15, 0.14, 0.70, duration=2.0, open_gripper=True)
     if res1 is None:
         rospy.logerr('Hold pose goal failed or timed out')
     else:
@@ -50,7 +50,7 @@ def main():
     input("Press Enter to continue...")
 
     # Releasing pose: move further out in x (1.0)
-    res2 = send_goal(client, 0.85, 0.0, 0.25, 1.0, 0.0, 0.0, 0.0, duration=2.0, open_gripper=False)
+    res2 = send_goal(client, 0.80, 0.0, 0.45, 0.0, 0.0, 0.0, 1.0, duration=2.0, open_gripper=False)
     if res2 is None:
         rospy.logerr('Releasing pose goal failed or timed out')
     else:

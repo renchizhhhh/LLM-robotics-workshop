@@ -65,6 +65,7 @@ add_service_files(
     GetImage.srv
     GetInitialPose.srv
     GetGraspFeedback.srv
+    GetRobotPose.srv
     MoveToPosition.srv
     ArmCommand.srv
 )

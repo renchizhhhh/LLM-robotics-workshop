@@ -9,7 +9,7 @@ import bosdyn.client.lease
 import bosdyn.client.estop
 from bosdyn.client.robot_state import RobotStateClient
 from bosdyn.client.robot_command import RobotCommandBuilder, RobotCommandClient, blocking_stand
-from bosdyn.client.frame_helpers import get_se2_a_tform_b, ODOM_FRAME_NAME, BODY_FRAME_NAME
+from bosdyn.client.frame_helpers import get_se2_a_tform_b, VISION_FRAME_NAME, BODY_FRAME_NAME
 from bosdyn.client.image import ImageClient
 from bosdyn.client.manipulation_api_client import ManipulationApiClient
 from bosdyn.api import estop_pb2
@@ -259,8 +259,8 @@ class SpotRobotManager:
             # Store initial pose
             robot_state = self.robot_state_client.get_robot_state()
             self.initial_pose = get_se2_a_tform_b(
-                robot_state.kinematic_state.transforms_snapshot, ODOM_FRAME_NAME, BODY_FRAME_NAME)
-                
+                robot_state.kinematic_state.transforms_snapshot, VISION_FRAME_NAME, BODY_FRAME_NAME)
+
             self.is_standing = True
             rospy.loginfo("Robot standing")
             return TriggerResponse(success=True, message="Robot standing")

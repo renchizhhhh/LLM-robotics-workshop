@@ -19,9 +19,8 @@ from spot_hololens_llm_interface.msg import (
 
 from bosdyn.api import geometry_pb2, manipulation_api_pb2, image_pb2
 from bosdyn.api import arm_command_pb2
-from bosdyn.client.frame_helpers import VISION_FRAME_NAME
 from bosdyn.client.robot_command import RobotCommandBuilder
-from bosdyn.client.frame_helpers import GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
+from bosdyn.client.frame_helpers import VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME, ODOM_FRAME_NAME, get_a_tform_b
 from bosdyn.client import math_helpers
 
 
@@ -321,7 +320,7 @@ class SpotGraspActionServer:
             
             # Handle post-grasp actions
             if success:
-                self._handle_successful_grasp_direct()
+                self._handle_successful_grasp_direct(release_after_grasp=goal.return_to_initial_pose)
             
             return success, api_feedback_response.current_state
             
@@ -329,7 +328,7 @@ class SpotGraspActionServer:
             rospy.logerr(f"Grasp execution failed: {e}")
             return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
     
-    def _handle_successful_grasp_direct(self):
+    def _handle_successful_grasp_direct(self, release_after_grasp=False):
         """Handle post-grasp actions using direct robot commands"""
         try:
             from bosdyn.client.robot_command import RobotCommandBuilder
@@ -337,20 +336,29 @@ class SpotGraspActionServer:
             clients = self.robot_manager.get_clients()
             cmd_client = clients['command']
             
-            # Open gripper to release object
-            open_cmd = RobotCommandBuilder.claw_gripper_open_command()
-            cmd_client.robot_command(open_cmd, end_time_secs=time.time() + 2)
-            time.sleep(1.5)
-            
-            # Raise arm to carry position
-            carry_cmd = RobotCommandBuilder.arm_carry_command()
-            cmd_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
-            time.sleep(2.0)
-            
-            # Close gripper
-            close_cmd = RobotCommandBuilder.claw_gripper_close_command()
-            cmd_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
-            time.sleep(1.5)
+            if release_after_grasp:
+                # Open gripper to release object
+                open_cmd = RobotCommandBuilder.claw_gripper_open_command()
+                cmd_client.robot_command(open_cmd, end_time_secs=time.time() + 2)
+                time.sleep(1.5)
+                
+                # Raise arm to carry position
+                carry_cmd = RobotCommandBuilder.arm_carry_command()
+                cmd_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
+                time.sleep(2.0)
+                
+                # Close gripper
+                close_cmd = RobotCommandBuilder.claw_gripper_close_command()
+                cmd_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
+                time.sleep(1.5)
+            else:
+                # Just carry the object
+                carry_cmd = RobotCommandBuilder.arm_carry_command()
+                cmd_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
+                # Just stow the arm
+                # stow_cmd = RobotCommandBuilder.arm_stow_command()
+                # cmd_client.robot_command(stow_cmd, end_time_secs=time.time() + 3)
+                time.sleep(2.0)
             
         except Exception as e:
             rospy.logerr(f"Failed to handle successful grasp: {e}")
@@ -381,8 +389,6 @@ class SpotGraspActionServer:
             _, _, tyaw = euler_from_quaternion(quat)
             
             # Build SE2 pose
-            from bosdyn.api import geometry_pb2
-            from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
             
             se2 = geometry_pb2.SE2Pose(
                 position=geometry_pb2.Vec2(x=tx, y=ty),
@@ -390,7 +396,7 @@ class SpotGraspActionServer:
             )
             
             # Move back to initial position
-            move_cmd = RobotCommandBuilder.synchro_se2_trajectory_command(se2, ODOM_FRAME_NAME)
+            move_cmd = RobotCommandBuilder.synchro_se2_trajectory_command(se2, VISION_FRAME_NAME)
             cmd_client.robot_command(move_cmd, end_time_secs=time.time() + 10)
                     
         except Exception as e:

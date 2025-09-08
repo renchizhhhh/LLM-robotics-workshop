@@ -1,0 +1,5 @@
+---
+bool success
+string message
+geometry_msgs/PoseStamped robot_pose
+geometry_msgs/PoseStamped end_effector_pose

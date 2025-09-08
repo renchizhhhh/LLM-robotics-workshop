@@ -7,12 +7,13 @@ import cv2
 import math
 
 from bosdyn.client.robot_command import RobotCommandBuilder, block_until_arm_arrives, block_for_trajectory_cmd
-from bosdyn.client.frame_helpers import ODOM_FRAME_NAME
+from bosdyn.client.frame_helpers import VISION_FRAME_NAME, ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME, get_a_tform_b
 from bosdyn.api import geometry_pb2, image_pb2, robot_command_pb2
 
 from spot_hololens_llm_interface.srv import (
     GetImage, GetImageResponse,
     GetInitialPose, GetInitialPoseResponse, 
+    GetRobotPose, GetRobotPoseResponse,
     
     MoveToPosition, MoveToPositionResponse,
     ArmCommand, ArmCommandResponse
@@ -59,6 +60,7 @@ class SpotSharedServices:
         # Setup robot operation services
         self.srv_get_image = rospy.Service('~get_image', GetImage, self.handle_get_image)
         self.srv_get_initial_pose = rospy.Service('~get_initial_pose', GetInitialPose, self.handle_get_initial_pose)
+        self.srv_get_robot_pose = rospy.Service('~get_robot_pose', GetRobotPose, self.handle_get_robot_pose)
         self.srv_move_to_position = rospy.Service('~move_to_position', MoveToPosition, self.handle_move_to_position)
         self.srv_arm_command = rospy.Service('~arm_command', ArmCommand, self.handle_arm_command)
         
@@ -133,7 +135,7 @@ class SpotSharedServices:
         if self.robot_manager.initial_pose is not None:
             # Convert SE2 pose to PoseStamped
             pose_stamped = PoseStamped()
-            pose_stamped.header.frame_id = "odom"
+            pose_stamped.header.frame_id = "vision"
             pose_stamped.header.stamp = rospy.Time.now()
             pose_stamped.pose.position.x = self.robot_manager.initial_pose.x
             pose_stamped.pose.position.y = self.robot_manager.initial_pose.y
@@ -155,13 +157,67 @@ class SpotSharedServices:
             response.message = "No initial pose stored. Robot didn't stand or move after boot?"
             
         return response
+
+    def handle_get_robot_pose(self, req):
+        """Return current robot pose in ODOM frame and end-effector pose in body frame."""
+        response = GetRobotPoseResponse()
+
+        try:
+            clients = self.robot_manager.get_clients()
+            if not clients or not clients.get('robot_state'):
+                response.success = False
+                response.message = "Robot not connected or robot_state client not available"
+                return response
+
+            robot_state = clients['robot_state'].get_robot_state()
+            ts = robot_state.kinematic_state.transforms_snapshot
+
+            # Robot pose in ODOM frame
+            vision_T_body = get_a_tform_b(ts, VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+
+            robot_pose = PoseStamped()
+            robot_pose.header.frame_id = VISION_FRAME_NAME
+            robot_pose.header.stamp = rospy.Time.now()
+            robot_pose.pose.position.x = vision_T_body.x
+            robot_pose.pose.position.y = vision_T_body.y
+            robot_pose.pose.position.z = vision_T_body.z
+            robot_pose.pose.orientation.x = vision_T_body.rot.x
+            robot_pose.pose.orientation.y = vision_T_body.rot.y
+            robot_pose.pose.orientation.z = vision_T_body.rot.z
+            robot_pose.pose.orientation.w = vision_T_body.rot.w
+
+            # End-effector pose expressed in body frame
+            # TODO: is this the same as body?
+            body_T_ee = get_a_tform_b(ts, GRAV_ALIGNED_BODY_FRAME_NAME, 'hand')
+
+            ee_pose = PoseStamped()
+            ee_pose.header.frame_id = 'body'
+            ee_pose.header.stamp = rospy.Time.now()
+            ee_pose.pose.position.x = body_T_ee.x
+            ee_pose.pose.position.y = body_T_ee.y
+            ee_pose.pose.position.z = body_T_ee.z
+            ee_pose.pose.orientation.x = body_T_ee.rot.x
+            ee_pose.pose.orientation.y = body_T_ee.rot.y
+            ee_pose.pose.orientation.z = body_T_ee.rot.z
+            ee_pose.pose.orientation.w = body_T_ee.rot.w
+
+            response.robot_pose = robot_pose
+            response.end_effector_pose = ee_pose
+            response.success = True
+            response.message = 'Robot and end-effector poses retrieved'
+            return response
+
+        except Exception as e:
+            response.success = False
+            response.message = f"Failed to get robot pose: {e}"
+            return response
     
     def handle_move_to_position(self, req):
         """Move robot to specified position (uses trajectory commands)
 
         Supported frames:
          - "body" / "flat_body" : target_pose is expressed in the robot's body frame (x forward, y left)
-         - "odom" / "vision"       : target_pose is expressed in odom frame
+         - "vision" / "odom"       : target_pose is expressed in vision frame
 
         This implementation sends the trajectory command and then polls robot_command_feedback to
         determine whether the command actually completed successfully.
@@ -260,8 +316,8 @@ class SpotSharedServices:
 
                 return _apply_move_result(response, True, status_name, frame, bx, by, byaw)
 
-
-            elif frame in ("odom", "vision"):
+            # TODO: check how close vision is to odom
+            elif frame in ("vision", "odom"):
                 # Build SE2 pose in odom/vision frame
                 se2 = geometry_pb2.SE2Pose(
                     position=geometry_pb2.Vec2(x=tx, y=ty),
@@ -273,7 +329,7 @@ class SpotSharedServices:
                                         abs(tyaw) / rotate_speed if abs(tyaw) > 0.02 else 0.0,
                                         0.5)
 
-                cmd = RobotCommandBuilder.synchro_se2_trajectory_command(se2, ODOM_FRAME_NAME)
+                cmd = RobotCommandBuilder.synchro_se2_trajectory_command(se2, VISION_FRAME_NAME)
                 try:
                     cmd_id = cmd_client.robot_command(cmd, end_time_secs=time.time() + estimate_duration + 5.0)
                     

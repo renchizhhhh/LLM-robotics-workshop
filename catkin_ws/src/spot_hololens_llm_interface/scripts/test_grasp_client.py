@@ -26,7 +26,7 @@ def test_interactive_grasp():
     # show_preview=True opens an OpenCV window on the server side for user click
     goal.show_preview = True
     goal.window_title = "Click object to grasp"
-    goal.return_to_initial_pose = True
+    goal.return_to_initial_pose = False
     # optional forcing flags
     goal.force_top_down_grasp = False
     goal.force_horizontal_grasp = True
