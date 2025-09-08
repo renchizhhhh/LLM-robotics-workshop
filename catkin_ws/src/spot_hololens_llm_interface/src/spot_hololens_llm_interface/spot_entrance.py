@@ -46,16 +46,6 @@ class SpotRobotManager:
             bosdyn.client.util.setup_logging(self.verbose)
             self.sdk = bosdyn.client.create_standard_sdk('SpotRobotManager')
             self.robot = self.sdk.create_robot(self.hostname)
-            
-            # Get credentials from ROS parameters and set as environment variables
-            username = rospy.get_param('~username', 'user')
-            password = rospy.get_param('~password', '')
-            
-            # Set environment variables for authentication
-            import os
-            os.environ['BOSDYN_CLIENT_USERNAME'] = username
-            os.environ['BOSDYN_CLIENT_PASSWORD'] = password
-            
             bosdyn.client.util.authenticate(self.robot)
             rospy.loginfo("Spot entrance authenticated with robot using provided credentials")
             

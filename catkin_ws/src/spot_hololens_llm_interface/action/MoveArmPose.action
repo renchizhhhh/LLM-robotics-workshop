@@ -1,0 +1,18 @@
+# Goal
+float64 x                        # X position in odom frame (meters)
+float64 y                        # Y position in odom frame (meters)
+float64 z                        # Z position in odom frame (meters)
+float64 qw                       # Orientation quaternion w
+float64 qx                       # Orientation quaternion x
+float64 qy                       # Orientation quaternion y
+float64 qz                       # Orientation quaternion z
+float32 duration                 # Trajectory duration in seconds
+bool open_gripper                # Whether to open the gripper while moving
+---
+# Result
+bool success                     # Whether move succeeded
+string message                   # Optional status message
+---
+# Feedback
+string current_state             # Current state description
+float32 progress                 # Progress 0.0 - 1.0

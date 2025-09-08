@@ -74,6 +74,7 @@ add_action_files(
   FILES
   GraspObject.action
   InteractiveGrasp.action
+  MoveArmPose.action
 )
 
 ## Generate added messages and services with any dependencies listed here

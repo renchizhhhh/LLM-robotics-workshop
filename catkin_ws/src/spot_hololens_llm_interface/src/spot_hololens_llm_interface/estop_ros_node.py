@@ -56,15 +56,6 @@ class EstopRosNode(object):
             sdk = bosdyn.client.create_standard_sdk('ros_estop_node')
             robot = sdk.create_robot(hostname)
             
-            # Get credentials from ROS parameters and set as environment variables
-            username = rospy.get_param('~username', 'user')
-            password = rospy.get_param('~password', '')
-            
-            # Set environment variables for authentication
-            import os
-            os.environ['BOSDYN_CLIENT_USERNAME'] = username
-            os.environ['BOSDYN_CLIENT_PASSWORD'] = password
-            
             try:
                 bosdyn.client.util.authenticate(robot)
                 rospy.loginfo("Estop node authenticated with robot using provided credentials")
