@@ -7,8 +7,9 @@ Usage:
 3. Run this script: python3 test_spot.py
 
 This script sends commands to the FSM with numbered steps:
-1. Connect -> 2. Power on -> 3. Stand -> 4. Get image -> 5. Move forward -> 
-6. Rotate 90° -> 7. Rotate 90° -> 8. Get image -> 9. Sit -> 10. Power off -> 11. Disconnect
+1. Connect -> 2. Power on -> 3. Stand -> 4. Get initial pose -> 5. Arm command (stow) -> 
+6. Get image -> 7. Move forward -> 8. Rotate 90° -> 9. Rotate 90° -> 10. Get image -> 
+11. Sit -> 12. Power off -> 13. Disconnect
 """
 
 import rospy
@@ -52,36 +53,44 @@ def main():
         rospy.loginfo("Step 3: Standing up...")
         spot_fsm.send("stand_up")
         
-        # Step 4: Get initial image
-        rospy.loginfo("Step 4: Getting initial image...")
+        # Step 4: Get initial pose
+        rospy.loginfo("Step 4: Getting initial pose...")
+        spot_fsm.send("get_initial_pose")
+        
+        # Step 5: Test arm command (stow)
+        rospy.loginfo("Step 5: Testing arm command (stow)...")
+        spot_fsm.send("arm_command", command_type="stow")
+        
+        # Step 6: Get initial image
+        rospy.loginfo("Step 6: Getting initial image...")
         spot_fsm.send("get_image", image_source="frontleft_fisheye_image")
         
-        # Step 5: Move forward 0.2 meters
-        rospy.loginfo("Step 5: Moving forward 0.2 meters...")
+        # Step 7: Move forward 0.2 meters
+        rospy.loginfo("Step 7: Moving forward 0.2 meters...")
         spot_fsm.send("start_moving", x=0.2, y=0.0, yaw=0.0, frame="body")
         
-        # Step 6: Rotate half pi (90 degrees) to the left
-        rospy.loginfo("Step 6: Rotating half pi (90 degrees) to the left...")
+        # Step 8: Rotate half pi (90 degrees) to the left
+        rospy.loginfo("Step 8: Rotating half pi (90 degrees) to the left...")
         spot_fsm.send("start_moving", x=0.0, y=0.0, yaw=1.57, frame="body")  # 1.57 radians = 90 degrees
         
-        # Step 7: Rotate another half pi (90 degrees) to the left (total 180 degrees)
-        rospy.loginfo("Step 7: Rotating another half pi (90 degrees) to the left...")
+        # Step 9: Rotate another half pi (90 degrees) to the left (total 180 degrees)
+        rospy.loginfo("Step 9: Rotating another half pi (90 degrees) to the left...")
         spot_fsm.send("start_moving", x=0.0, y=0.0, yaw=1.57, frame="body")  # Another 90 degrees
         
-        # Step 8: Get image after rotations
-        rospy.loginfo("Step 8: Getting image after rotations...")
+        # Step 10: Get image after rotations
+        rospy.loginfo("Step 10: Getting image after rotations...")
         spot_fsm.send("get_image", image_source="frontleft_fisheye_image")
 
-        # Step 9: Sit down
-        rospy.loginfo("Step 9: Sitting down...")
+        # Step 11: Sit down
+        rospy.loginfo("Step 11: Sitting down...")
         spot_fsm.send("sit_down")
         
-        # Step 10: Power off
-        rospy.loginfo("Step 10: Powering off...")
+        # Step 12: Power off
+        rospy.loginfo("Step 12: Powering off...")
         spot_fsm.send("power_off_from_sit")
         
-        # Step 11: Disconnect
-        rospy.loginfo("Step 11: Disconnecting...")
+        # Step 13: Disconnect
+        rospy.loginfo("Step 13: Disconnecting...")
         spot_fsm.send("disconnect")
         
         rospy.loginfo("Test sequence completed successfully!")

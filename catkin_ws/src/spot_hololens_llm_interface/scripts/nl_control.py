@@ -18,6 +18,8 @@ Available FSM actions:
 - "sit_down" - Sit down
 - "start_moving", x=float, y=float, yaw=float, frame="body" - Move robot
 - "get_image", image_source="camera_name" - Take image
+- "get_initial_pose" - Get initial pose
+- "arm_command", command_type="open|close|stow|carry" - Arm control
 
 Constraints:
 - Stand before movement/manipulation
