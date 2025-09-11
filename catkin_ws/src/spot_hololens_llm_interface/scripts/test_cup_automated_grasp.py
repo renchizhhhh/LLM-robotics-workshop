@@ -114,7 +114,7 @@ def test_automated_grasp():
 
     goal = AutomatedGraspGoal()
     goal.image_source = image_source
-    goal.object_type = "cup"
+    goal.object_type = "Tomato can"
     goal.force_top_down_grasp = False
     goal.force_horizontal_grasp = True
     goal.force_45_angle_grasp = False
@@ -137,7 +137,7 @@ def test_automated_grasp():
         rospy.loginfo(f"Automated grasp successful! Grasped at ({result.selected_pixel_x}, {result.selected_pixel_y})")
         
         if img is not None:
-            save_grasp_image(img, result.selected_pixel_x, result.selected_pixel_y, "cup")
+            save_grasp_image(img, result.selected_pixel_x, result.selected_pixel_y, "tomato can")
         
         grasp_success = True
     else:

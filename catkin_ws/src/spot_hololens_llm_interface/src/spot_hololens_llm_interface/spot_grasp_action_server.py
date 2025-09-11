@@ -634,17 +634,19 @@ class SpotGraspActionServer:
                 import os
                 os.makedirs('/Docker-LLM-Spot-Image/catkin_ws/images', exist_ok=True)
                 
+                # Create a copy of the image for visualization to avoid modifying the original
+                img_vis = img.copy()
                 box_size = 50
                 x1, y1 = max(0, pixel_x - box_size), max(0, pixel_y - box_size)
-                x2, y2 = min(img.shape[1], pixel_x + box_size), min(img.shape[0], pixel_y + box_size)
+                x2, y2 = min(img_vis.shape[1], pixel_x + box_size), min(img_vis.shape[0], pixel_y + box_size)
                 
-                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.circle(img, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
-                cv2.putText(img, f"Grasp {goal.object_type} at ({pixel_x}, {pixel_y})", 
+                cv2.rectangle(img_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.circle(img_vis, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+                cv2.putText(img_vis, f"Grasp {goal.object_type} at ({pixel_x}, {pixel_y})", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
                 filename = f"/Docker-LLM-Spot-Image/catkin_ws/images/grasp_{goal.object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
-                cv2.imwrite(filename, img)
+                cv2.imwrite(filename, img_vis)
                 rospy.loginfo(f"Detection image saved: {filename}")
             except Exception as e:
                 rospy.logwarn(f"Failed to save detection image: {e}")
