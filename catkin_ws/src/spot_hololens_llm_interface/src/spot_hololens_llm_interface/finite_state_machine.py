@@ -2,9 +2,18 @@
 
 import rospy
 import math
+import time
+import json
+import sys
+import os
 from statemachine import StateMachine, State
 from std_srvs.srv import Trigger
+from std_msgs.msg import String
 from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest, GetInitialPose, GetInitialPoseRequest, ArmCommand, ArmCommandRequest
+
+# Add the scripts directory to the path to import timing_utils
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts'))
+from timing_utils import recorder
 
 class SpotStateMachine(StateMachine):
     """
@@ -53,6 +62,8 @@ class SpotStateMachine(StateMachine):
         # Check for dummy mode parameter
         self.dummy_mode = dummy_mode if dummy_mode is not None else rospy.get_param('~dummy_mode', False)
         
+        # Timing utilities will be imported from timing_utils module
+        
         if self.dummy_mode:
             rospy.loginfo("FSM: Running in DUMMY MODE - using dummy services")
         else:
@@ -78,23 +89,30 @@ class SpotStateMachine(StateMachine):
         self.move_y = 0.0
         self.move_yaw = 0.0
         self.move_frame = "body"
+    
         
     # State entry methods - call services when states change
     def on_enter_connected(self):
         rospy.loginfo("FSM: Connecting to robot")
-        self._call_service(self.connect_srv, "Connect")
+        # Note: Timing events for connect are handled in nl_control.py initialization
+        result = self._call_service(self.connect_srv, "Connect")
 
     def on_enter_powered_off(self):
         rospy.loginfo("FSM: Powering on robot")
-        self._call_service(self.power_on_srv, "Power on")
+        # Note: Timing events for power_on are handled in nl_control.py initialization
+        result = self._call_service(self.power_on_srv, "Power on")
 
     def on_enter_stand(self):
         rospy.loginfo("FSM: Standing up")
-        self._call_service(self.stand_srv, "Stand")
+        recorder.publish_event('start_stand_up')
+        result = self._call_service(self.stand_srv, "Stand")
+        recorder.publish_event('stop_stand_up')
 
     def on_enter_sit(self):
         rospy.loginfo("FSM: Sitting down")
-        self._call_service(self.sit_srv, "Sit")
+        recorder.publish_event('start_sit_down')
+        result = self._call_service(self.sit_srv, "Sit")
+        recorder.publish_event('stop_sit_down')
 
     def on_enter_moving(self):
         # Get parameters from kwargs if available, otherwise use stored ones
@@ -105,7 +123,9 @@ class SpotStateMachine(StateMachine):
         move_frame = kwargs.get('frame', self.move_frame)
         
         rospy.loginfo(f"FSM: Moving x={move_x}, y={move_y}, yaw={move_yaw}")
-        self._call_move_service(move_x, move_y, move_yaw, move_frame)
+        recorder.publish_event('start_moving')
+        result = self._call_move_service(move_x, move_y, move_yaw, move_frame)
+        recorder.publish_event('stop_moving')
     
     def on_enter_get_image(self):
         # Get image source from kwargs, default to frontleft_fisheye_image
@@ -113,11 +133,15 @@ class SpotStateMachine(StateMachine):
         image_source = kwargs.get('image_source', 'frontleft_fisheye_image')
         
         rospy.loginfo(f"FSM: Getting image from {image_source}")
+        recorder.publish_event('start_get_image')
         self._call_get_image_service(image_source)
+        recorder.publish_event('stop_get_image')
 
     def on_enter_get_initial_pose(self):
         rospy.loginfo("FSM: Getting initial pose")
+        recorder.publish_event('start_get_initial_pose')
         self._call_get_initial_pose_service()
+        recorder.publish_event('stop_get_initial_pose')
 
     def on_enter_arm_command(self):
         # Get command type from kwargs, default to "stow"
@@ -125,19 +149,28 @@ class SpotStateMachine(StateMachine):
         command_type = kwargs.get('command_type', 'stow')
         
         rospy.loginfo(f"FSM: Executing arm command: {command_type}")
+        recorder.publish_event('start_arm_command')
         self._call_arm_command_service(command_type)
+        recorder.publish_event('stop_arm_command')
 
     def on_enter_powered_off_from_stand(self):
         rospy.loginfo("FSM: Powering off robot")
-        self._call_service(self.power_off_srv, "Power off")
+        recorder.publish_event('start_power_off')
+        result = self._call_service(self.power_off_srv, "Power off")
+        recorder.publish_event('stop_power_off')
 
     def on_enter_powered_off_from_sit(self):
         rospy.loginfo("FSM: Powering off robot")
-        self._call_service(self.power_off_srv, "Power off")
+        recorder.publish_event('start_power_off')
+        result = self._call_service(self.power_off_srv, "Power off")
+        recorder.publish_event('stop_power_off')
 
     def on_enter_disconnected(self):
         rospy.loginfo("FSM: Disconnecting from robot")
-        self._call_service(self.disconnect_srv, "Disconnect")
+        recorder.publish_event('start_disconnect')
+        result = self._call_service(self.disconnect_srv, "Disconnect")
+        recorder.publish_event('stop_disconnect')
+
 
     def send(self, event, **kwargs):
         """Override send method to pass keyword arguments to state entry methods"""
@@ -200,12 +233,15 @@ class SpotStateMachine(StateMachine):
             if resp.success:
                 mode_text = " (dummy)" if self.dummy_mode else ""
                 rospy.loginfo(f"FSM: {name} successful{mode_text}")
+                return True
             else:
                 mode_text = " (dummy)" if self.dummy_mode else ""
                 rospy.logerr(f"FSM: {name} failed{mode_text}: {resp.message}")
+                return False
         except Exception as e:
             mode_text = " (dummy)" if self.dummy_mode else ""
             rospy.logerr(f"FSM: {name} service call failed{mode_text}: {e}")
+            return False
 
     def _call_move_service(self, x=None, y=None, yaw=None, frame=None):
         """Helper to call move service with provided or default parameters"""
@@ -228,12 +264,15 @@ class SpotStateMachine(StateMachine):
             if resp.success:
                 mode_text = " (dummy)" if self.dummy_mode else ""
                 rospy.loginfo(f"FSM: Move successful{mode_text}: {resp.message}")
+                return True
             else:
                 mode_text = " (dummy)" if self.dummy_mode else ""
                 rospy.logerr(f"FSM: Move failed{mode_text}: {resp.message}")
+                return False
         except Exception as e:
             mode_text = " (dummy)" if self.dummy_mode else ""
             rospy.logerr(f"FSM: Move service call failed{mode_text}: {e}")
+            return False
 
 
 if __name__ == "__main__":

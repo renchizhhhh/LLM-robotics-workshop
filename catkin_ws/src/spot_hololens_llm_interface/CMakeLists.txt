@@ -73,6 +73,7 @@ add_service_files(
 ## Generate actions in the 'action' folder
 add_action_files(
   FILES
+  DetectObject.action
   GraspObject.action
   InteractiveGrasp.action
   MoveArmPose.action
@@ -226,3 +227,5 @@ catkin_install_python(PROGRAMS
 
 ## Add folders to be run by python nosetests
 # catkin_add_nosetests(test)
+
+
