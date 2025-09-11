@@ -4,17 +4,18 @@ import rospy
 import time
 import cv2
 from cv_bridge import CvBridge
+import geometry_msgs.msg
+import tf.transformations
 
 import numpy as np
 import actionlib
 import threading
 
 from spot_hololens_llm_interface.msg import (
-    InteractiveGraspAction,
-    InteractiveGraspGoal,
-    InteractiveGraspResult,
-    InteractiveGraspFeedback
-    ,MoveArmPoseAction, MoveArmPoseGoal, MoveArmPoseResult, MoveArmPoseFeedback
+    DetectObjectAction, DetectObjectGoal, DetectObjectResult, DetectObjectFeedback,
+    InteractiveGraspAction, InteractiveGraspGoal, InteractiveGraspResult, InteractiveGraspFeedback,
+    MoveArmPoseAction, MoveArmPoseGoal, MoveArmPoseResult, MoveArmPoseFeedback,
+    AutomatedGraspAction, AutomatedGraspGoal, AutomatedGraspResult, AutomatedGraspFeedback
 )
 
 from bosdyn.api import geometry_pb2, manipulation_api_pb2, image_pb2
@@ -53,6 +54,7 @@ class SpotGraspActionServer:
         )
         self.interactive_grasp_server.start()
         
+        
         # Action server for moving arm to a specified pose
         self.move_arm_server = actionlib.SimpleActionServer(
             'move_arm_pose',
@@ -61,6 +63,24 @@ class SpotGraspActionServer:
             auto_start=False
         )
         self.move_arm_server.start()
+        
+        # Action server for object detection
+        self.detect_object_server = actionlib.SimpleActionServer(
+            'detect_object',
+            DetectObjectAction,
+            execute_cb=self.execute_detect_object_cb,
+            auto_start=False
+        )
+        self.detect_object_server.start()
+        
+        # Action server for automated grasp (detect + grasp)
+        self.automated_grasp_server = actionlib.SimpleActionServer(
+            'automated_grasp',
+            AutomatedGraspAction,
+            execute_cb=self.execute_automated_grasp_cb,
+            auto_start=False
+        )
+        self.automated_grasp_server.start()
         rospy.loginfo("Spot grasp action server started with direct robot manager access")
     
     def execute_interactive_grasp_cb(self, goal):
@@ -401,6 +421,284 @@ class SpotGraspActionServer:
                     
         except Exception as e:
             rospy.logerr(f"Failed to return to initial pose: {e}")
+
+    def execute_detect_object_cb(self, goal):
+        """Execute object detection action"""
+        rospy.loginfo(f"Detecting {goal.object_type} in {goal.image_source}")
+        
+        result = DetectObjectResult()
+        feedback = DetectObjectFeedback()
+        
+        try:
+            # Verify we have necessary clients
+            clients = self.robot_manager.get_clients()
+            if not clients or not clients['image']:
+                result.success = False
+                result.message = "Robot not connected or image client not available"
+                self.detect_object_server.set_aborted(result)
+                return
+            
+            # Get image from robot
+            feedback.current_state = "ACQUIRING_IMAGE"
+            feedback.progress = 0.1
+            feedback.status_message = f"Getting image from {goal.image_source}"
+            self.detect_object_server.publish_feedback(feedback)
+            
+            image_responses = clients['image'].get_image_from_sources([goal.image_source])
+            if len(image_responses) != 1:
+                result.success = False
+                result.message = f"Invalid number of images: {len(image_responses)}"
+                self.detect_object_server.set_aborted(result)
+                return
+            
+            image = image_responses[0]
+            if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
+                dtype = np.uint16
+            else:
+                dtype = np.uint8
+            img = np.fromstring(image.shot.image.data, dtype=dtype)
+            if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
+                img = img.reshape(image.shot.image.rows, image.shot.image.cols)
+            else:
+                img = cv2.imdecode(img, -1)
+            
+            # Detect object using AI
+            feedback.current_state = "DETECTING_OBJECT"
+            feedback.progress = 0.5
+            feedback.status_message = f"Detecting {goal.object_type} in image"
+            self.detect_object_server.publish_feedback(feedback)
+            
+            pixel_x, pixel_y = self._detect_object_center_direct(img, goal.object_type)
+            
+            # Set results
+            result.success = pixel_x is not None
+            result.message = f"{goal.object_type} detected successfully" if result.success else f"No {goal.object_type} detected in image"
+            result.pixel_x = pixel_x if pixel_x is not None else 0
+            result.pixel_y = pixel_y if pixel_y is not None else 0
+            result.confidence = 0.8 if result.success else 0.0
+            
+            # Complete
+            feedback.current_state = "COMPLETED"
+            feedback.progress = 1.0
+            feedback.status_message = "Detection completed"
+            self.detect_object_server.publish_feedback(feedback)
+            
+            if result.success:
+                rospy.loginfo(f"Detected {goal.object_type} at ({result.pixel_x}, {result.pixel_y})")
+                self.detect_object_server.set_succeeded(result)
+            else:
+                rospy.logwarn(f"Detection failed: {result.message}")
+                self.detect_object_server.set_aborted(result)
+                
+        except Exception as e:
+            rospy.logerr(f"Detection action failed: {e}")
+            result.success = False
+            result.message = f"Exception during detection: {str(e)}"
+            result.pixel_x = result.pixel_y = result.confidence = 0
+            self.detect_object_server.set_aborted(result)
+    
+    def _detect_object_center_direct(self, img, object_type):
+        """Detect object center using Gemini AI (helper function)"""
+        try:
+            import os, json
+            from google import genai
+            from google.genai import types
+            from PIL import Image
+            
+            api_key = os.getenv('GOOGLE_API_KEY')
+            if not api_key:
+                rospy.logerr("GOOGLE_API_KEY not set")
+                return None, None
+            
+            # Convert to PIL and detect
+            img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(img_rgb)
+            width, height = pil_image.size
+            
+            client = genai.Client(api_key=api_key)
+            prompt = (
+                f"Find the most prominent {object_type} in the image. "
+                "Return ONLY valid JSON: [{\"label\": \"" + object_type + "\", \"box_2d\": [ymin, xmin, ymax, xmax]}] "
+                "Rules: ymin,xmin,ymax,xmax integers 0-1000, ymin<ymax, xmin<xmax, NO other text"
+            )
+            
+            config = types.GenerateContentConfig(response_mime_type="application/json")
+            response = client.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=[pil_image, prompt],
+                config=config
+            )
+            
+            # Process detection result
+            boxes = json.loads(response.text)
+            if not boxes or "box_2d" not in boxes[0] or len(boxes[0]["box_2d"]) < 4:
+                return None, None
+            
+            y1, x1, y2, x2 = boxes[0]["box_2d"][:4]
+            
+            # Validate and convert coordinates
+            y1, x1, y2, x2 = max(0, min(y1, 1000)), max(0, min(x1, 1000)), max(0, min(y2, 1000)), max(0, min(x2, 1000))
+            if y1 > y2: y1, y2 = y2, y1
+            if x1 > x2: x1, x2 = x2, x1
+            
+            # Convert to pixel coordinates and get center
+            cx = int((x1 + x2) / 2000 * width)
+            cy = int((y1 + y2) / 2000 * height)
+            
+            rospy.loginfo(f"Detected {object_type} at ({cx}, {cy})")
+            return cx, cy
+                
+        except Exception as e:
+            rospy.logerr(f"Object detection failed: {e}")
+            return None, None
+
+    def execute_automated_grasp_cb(self, goal):
+        """Execute automated grasp: detect object + grasp at detected pixel"""
+        rospy.loginfo(f"Executing automated grasp for {goal.object_type} in {goal.image_source}")
+        
+        result = AutomatedGraspResult()
+        feedback = AutomatedGraspFeedback()
+        
+        try:
+            # Verify we have necessary clients
+            clients = self.robot_manager.get_clients()
+            if not clients or not clients['image']:
+                result.success = False
+                result.message = "Robot not connected or image client not available"
+                self.automated_grasp_server.set_aborted(result)
+                return
+            
+            # Get initial pose for return if requested
+            initial_pose = None
+            if goal.return_to_initial_pose:
+                if hasattr(self.robot_manager, 'initial_pose') and self.robot_manager.initial_pose:
+                    initial_pose = geometry_msgs.msg.PoseStamped()
+                    initial_pose.header.frame_id = "odom"
+                    initial_pose.header.stamp = rospy.Time.now()
+                    initial_pose.pose.position.x = self.robot_manager.initial_pose.x
+                    initial_pose.pose.position.y = self.robot_manager.initial_pose.y
+                    initial_pose.pose.position.z = 0.0
+                    
+                    # Convert angle to quaternion
+                    quat = tf.transformations.quaternion_from_euler(0, 0, self.robot_manager.initial_pose.angle)
+                    initial_pose.pose.orientation.x = quat[0]
+                    initial_pose.pose.orientation.y = quat[1]
+                    initial_pose.pose.orientation.z = quat[2]
+                    initial_pose.pose.orientation.w = quat[3]
+                else:
+                    rospy.logwarn("No initial pose available for return to initial pose")
+            
+            # Get image from robot
+            feedback.current_state = "ACQUIRING_IMAGE"
+            feedback.progress = 0.1
+            feedback.status_message = f"Getting image from {goal.image_source}"
+            self.automated_grasp_server.publish_feedback(feedback)
+            
+            image_responses = clients['image'].get_image_from_sources([goal.image_source])
+            if len(image_responses) != 1:
+                result.success = False
+                result.message = f"Invalid number of images: {len(image_responses)}"
+                self.automated_grasp_server.set_aborted(result)
+                return
+            
+            image = image_responses[0]
+            if image.shot.image.pixel_format == image_pb2.Image.PIXEL_FORMAT_DEPTH_U16:
+                dtype = np.uint16
+            else:
+                dtype = np.uint8
+            img = np.fromstring(image.shot.image.data, dtype=dtype)
+            if image.shot.image.format == image_pb2.Image.FORMAT_RAW:
+                img = img.reshape(image.shot.image.rows, image.shot.image.cols)
+            else:
+                img = cv2.imdecode(img, -1)
+            
+            # Detect object using AI
+            feedback.current_state = "DETECTING_OBJECT"
+            feedback.progress = 0.2
+            feedback.status_message = f"Detecting {goal.object_type} in image"
+            self.automated_grasp_server.publish_feedback(feedback)
+            
+            pixel_x, pixel_y = self._detect_object_center_direct(img, goal.object_type)
+            
+            if pixel_x is None or pixel_y is None:
+                result.success = False
+                result.message = f"No {goal.object_type} detected in image"
+                self.automated_grasp_server.set_aborted(result)
+                return
+            
+            result.selected_pixel_x = pixel_x
+            result.selected_pixel_y = pixel_y
+            
+            # Save detection image with visualization
+            try:
+                import os
+                os.makedirs('/Docker-LLM-Spot-Image/catkin_ws/images', exist_ok=True)
+                
+                box_size = 50
+                x1, y1 = max(0, pixel_x - box_size), max(0, pixel_y - box_size)
+                x2, y2 = min(img.shape[1], pixel_x + box_size), min(img.shape[0], pixel_y + box_size)
+                
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.circle(img, (pixel_x, pixel_y), 5, (0, 0, 255), -1)
+                cv2.putText(img, f"Grasp {goal.object_type} at ({pixel_x}, {pixel_y})", 
+                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                filename = f"/Docker-LLM-Spot-Image/catkin_ws/images/grasp_{goal.object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
+                cv2.imwrite(filename, img)
+                rospy.loginfo(f"Detection image saved: {filename}")
+            except Exception as e:
+                rospy.logwarn(f"Failed to save detection image: {e}")
+            
+            # Wait for user confirmation
+            feedback.current_state = "WAITING_FOR_USER_CONFIRMATION"
+            feedback.progress = 0.3
+            feedback.waiting_for_user_input = True
+            feedback.status_message = f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to grasp or Ctrl+C to cancel"
+            self.automated_grasp_server.publish_feedback(feedback)
+            
+            rospy.loginfo(f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to continue grasping...")
+            try:
+                input()  # Wait for Enter key
+            except KeyboardInterrupt:
+                result.success = False
+                result.message = "User cancelled grasp"
+                self.automated_grasp_server.set_aborted(result)
+                return
+            
+            # Execute grasp
+            feedback.current_state = "EXECUTING_GRASP"
+            feedback.progress = 0.5
+            feedback.waiting_for_user_input = False
+            feedback.status_message = f"Executing grasp at detected pixel ({pixel_x}, {pixel_y})"
+            self.automated_grasp_server.publish_feedback(feedback)
+            
+            # Execute the grasp using the same helper as interactive grasp
+            success, grasp_state = self._execute_grasp_at_pixel_direct(
+                pixel_x, pixel_y, image, goal, feedback
+            )
+            
+            # Return to initial pose if requested and successful
+            if success and goal.return_to_initial_pose and initial_pose:
+                feedback.current_state = "RETURNING_TO_INITIAL_POSE"
+                feedback.progress = 0.9
+                feedback.status_message = "Returning to initial position"
+                self.automated_grasp_server.publish_feedback(feedback)
+                self._return_to_initial_pose_direct(initial_pose)
+            
+            result.success = success
+            result.grasp_state = grasp_state
+            result.message = "Automated grasp completed successfully" if success else "Automated grasp failed"
+            
+            if success:
+                self.automated_grasp_server.set_succeeded(result)
+            else:
+                self.automated_grasp_server.set_aborted(result)
+                
+        except Exception as e:
+            rospy.logerr(f"Automated grasp action failed: {e}")
+            result.success = False
+            result.message = f"Exception during automated grasp: {str(e)}"
+            self.automated_grasp_server.set_aborted(result)
 
     def execute_move_arm_cb(self, goal):
         """Action server callback to move the arm to a desired odom pose."""

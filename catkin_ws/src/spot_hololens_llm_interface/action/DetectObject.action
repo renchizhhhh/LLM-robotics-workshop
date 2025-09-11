@@ -1,0 +1,15 @@
+# Goal
+string image_source               # Camera source (e.g., 'frontright_fisheye_image')
+string object_type                # Type of object to detect (e.g., 'cup', 'bottle', 'ball')
+---
+# Result
+bool success                      # Whether the detection succeeded
+string message                    # Description of the result
+int32 pixel_x                     # X coordinate of detected object center
+int32 pixel_y                     # Y coordinate of detected object center
+float32 confidence                # Detection confidence (0.0 to 1.0)
+---
+# Feedback
+string current_state              # Current state of the detection operation
+float32 progress                  # Progress percentage (0.0 to 1.0)
+string status_message             # Current status description

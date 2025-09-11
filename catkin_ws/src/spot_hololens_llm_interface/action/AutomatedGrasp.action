@@ -1,0 +1,21 @@
+# Goal
+string image_source               # Camera source (e.g., 'hand_color_image')
+string object_type                # Type of object to detect (e.g., 'cup', 'bottle', 'ball')
+bool force_top_down_grasp         # Use top-down grasp constraint
+bool force_horizontal_grasp       # Use horizontal grasp constraint
+bool force_45_angle_grasp         # Use 45-degree angled grasp constraint
+bool force_squeeze_grasp          # Use squeeze grasp constraint
+bool return_to_initial_pose       # Whether to return to initial pose after grasp
+---
+# Result
+bool success                      # Whether the grasp operation succeeded
+string message                    # Description of the result
+int32 grasp_state                 # Final state from manipulation API
+int32 selected_pixel_x            # X coordinate of detected grasp point
+int32 selected_pixel_y            # Y coordinate of detected grasp point
+---
+# Feedback
+string current_state              # Current state of the grasp operation
+float32 progress                  # Progress percentage (0.0 to 1.0)
+string status_message             # Current status description
+bool waiting_for_user_input       # True when waiting for user confirmation

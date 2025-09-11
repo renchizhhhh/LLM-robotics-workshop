@@ -4,14 +4,21 @@ import sys
 import os
 import openai
 import threading
+import time
+import json
 from std_msgs.msg import String
 
 # Add the FSM to the path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'spot_hololens_llm_interface'))
 from finite_state_machine import SpotStateMachine
 
+# Import timing utilities
+from timing_utils import recorder
+
 # LLM prompt for converting natural language to FSM commands
 PROMPT = """Convert natural language to FSM actions for Boston Dynamics Spot robot.
+
+Current robot state: {current_state}
 
 Available FSM actions:
 - "stand_up" - Stand up
@@ -22,7 +29,8 @@ Available FSM actions:
 - "arm_command", command_type="open|close|stow|carry" - Arm control
 
 Constraints:
-- Stand before movement/manipulation
+- Only include "stand_up" if robot is not already standing or moving
+- Movement and manipulation require standing or moving state
 - Movement: x[-5,5], y[-3,3] meters, yaw in radians, movements and rotations should happen seperately
 - Image sources: frontleft_fisheye_image, frontright_fisheye_image, left_fisheye_image, right_fisheye_image, back_fisheye_image
 - Format: one action per line, no quotes/brackets, no numbering
@@ -40,10 +48,17 @@ class NaturalLanguageControl:
         
         # Auto-connect and power on robot
         rospy.loginfo("Auto-connecting robot...")
+        
+        # Connect robot
+        recorder.publish_event('start_connect')
         self.spot_fsm.send("connect")
-        rospy.sleep(1.0)
+        recorder.publish_event('stop_connect')
+        
+        # Power on robot
+        recorder.publish_event('start_power_on')
         self.spot_fsm.send("power_on")
-        rospy.sleep(1.0)
+        recorder.publish_event('stop_power_on')
+        
         rospy.loginfo("Robot ready for commands")
         
         if use_speech:
@@ -73,24 +88,41 @@ class NaturalLanguageControl:
         self.speech_input = msg.data
         self.speech_event.set()
         rospy.loginfo(f"Speech: {msg.data}")
+        
+        # Note: received_hololens_input will be published in process_command to ensure correct order
     
     def parse_command(self, command):
         """Parse natural language command using LLM."""
         if not self.llm:
             return None
-            
+        
+        # Publish LLM processing start
+        recorder.publish_event('start_llm_processing')
+        
         try:
+            # Get current robot state
+            current_state = self.spot_fsm.current_state.name
+            
+            # Format prompt with current state
+            formatted_prompt = PROMPT.format(current_state=current_state)
+            
             response = self.llm.responses.create(
                 model="gpt-5",
-                input=f"{PROMPT}\n\nCommand: {command}",
+                input=f"{formatted_prompt}\n\nCommand: {command}",
                 reasoning={"effort": "minimal"}
             )
             
             result = response.output_text.strip()
-            return [line.strip() for line in result.split('\n') if line.strip()]
+            actions = [line.strip() for line in result.split('\n') if line.strip()]
+            
+            # Publish LLM processing complete
+            recorder.publish_event('stop_llm_processing')
+            
+            return actions
             
         except Exception as e:
             rospy.logerr(f"LLM failed: {e}")
+            recorder.publish_event('stop_llm_processing')  # Make sure to stop timing even on error
             return None
     
     def execute_actions(self, actions):
@@ -101,6 +133,12 @@ class NaturalLanguageControl:
         for action in actions:
             try:
                 rospy.loginfo(f"Executing: {action}")
+                
+                # Parse action name (remove parameters)
+                if '=' in action:
+                    action_name = action.split()[0]  # Get first word (action name)
+                else:
+                    action_name = action.strip()
                 
                 if '=' in action:
                     # Parse action with parameters
@@ -141,8 +179,14 @@ class NaturalLanguageControl:
     
     def process_command(self, command):
         """Process natural language command."""
+        current_state = self.spot_fsm.current_state.name
         print(f"\nProcessing: {command}")
+        print(f"Current robot state: {current_state}")
         
+        # Publish timing event for HoloLens input received (when ROS starts processing)
+        recorder.publish_event('received_hololens_input')
+        
+        # Process with LLM immediately after receiving command
         actions = self.parse_command(command)
         if not actions:
             print("Parse failed - try a different command")
@@ -152,7 +196,14 @@ class NaturalLanguageControl:
         for i, action in enumerate(actions, 1):
             print(f"  {i}. {action}")
         
+        # Publish timing event for user confirmation start
+        recorder.publish_event('start_user_confirmation')
+        
         confirm = input("\nExecute this plan? (y/n): ").strip().lower()
+        
+        # Publish timing event for user confirmation end
+        recorder.publish_event('stop_user_confirmation')
+        
         if confirm in ['y', 'yes']:
             print("Executing...")
             self.execute_actions(actions)
@@ -201,6 +252,8 @@ def main():
         rospy.loginfo("Shutdown")
     except Exception as e:
         rospy.logerr(f"Error: {e}")
+    finally:
+        rospy.loginfo("Natural Language Control shutdown complete")
 
 if __name__ == "__main__":
     main()
