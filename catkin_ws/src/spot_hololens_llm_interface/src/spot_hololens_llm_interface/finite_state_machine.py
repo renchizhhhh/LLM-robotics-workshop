@@ -33,6 +33,22 @@ class SpotStateMachine(StateMachine):
     power_off_from_sit = sit.to(powered_off)
     disconnect = powered_off.to(disconnected)
 
+    def create_service_proxy(self, name, srv_type, timeout=5.0, retry_interval=1.0):
+        """Wait for a ROS service and create a ServiceProxy for it."""
+        while not rospy.is_shutdown():
+            try:
+                rospy.wait_for_service(name, timeout=timeout)
+                break
+            except rospy.ROSException:
+                rospy.logwarn(f"FSM: Service {name} not available yet, retrying in {retry_interval}s")
+                rospy.sleep(retry_interval)
+        try:
+            proxy = rospy.ServiceProxy(name, srv_type)
+            return proxy
+        except Exception as e:
+            rospy.logerr(f"FSM: Failed to create ServiceProxy for {name}: {e}")
+            return rospy.ServiceProxy(name, srv_type)
+
     def __init__(self, dummy_mode=None):
         # Check for dummy mode parameter
         self.dummy_mode = dummy_mode if dummy_mode is not None else rospy.get_param('~dummy_mode', False)
@@ -42,17 +58,17 @@ class SpotStateMachine(StateMachine):
         else:
             rospy.loginfo("FSM: Running in REAL MODE - using real robot services")
         
-        # Setup ROS service connections
-        self.connect_srv = rospy.ServiceProxy('/spot_entrance/connect', Trigger)
-        self.power_on_srv = rospy.ServiceProxy('/spot_entrance/power_on', Trigger)
-        self.stand_srv = rospy.ServiceProxy('/spot_entrance/stand', Trigger)
-        self.sit_srv = rospy.ServiceProxy('/spot_entrance/sit', Trigger)
-        self.move_srv = rospy.ServiceProxy('/spot_entrance/move_to_position', MoveToPosition)
-        self.get_image_srv = rospy.ServiceProxy('/spot_entrance/get_image', GetImage)
-        self.get_initial_pose_srv = rospy.ServiceProxy('/spot_entrance/get_initial_pose', GetInitialPose)
-        self.arm_command_srv = rospy.ServiceProxy('/spot_entrance/arm_command', ArmCommand)
-        self.power_off_srv = rospy.ServiceProxy('/spot_entrance/power_off', Trigger)
-        self.disconnect_srv = rospy.ServiceProxy('/spot_entrance/disconnect', Trigger)
+        # Setup ROS service connections (wait for services and create proxies)
+        self.connect_srv = self.create_service_proxy('/spot_entrance/connect', Trigger)
+        self.power_on_srv = self.create_service_proxy('/spot_entrance/power_on', Trigger)
+        self.stand_srv = self.create_service_proxy('/spot_entrance/stand', Trigger)
+        self.sit_srv = self.create_service_proxy('/spot_entrance/sit', Trigger)
+        self.move_srv = self.create_service_proxy('/spot_entrance/move_to_position', MoveToPosition)
+        self.get_image_srv = self.create_service_proxy('/spot_entrance/get_image', GetImage)
+        self.get_initial_pose_srv = self.create_service_proxy('/spot_entrance/get_initial_pose', GetInitialPose)
+        self.arm_command_srv = self.create_service_proxy('/spot_entrance/arm_command', ArmCommand)
+        self.power_off_srv = self.create_service_proxy('/spot_entrance/power_off', Trigger)
+        self.disconnect_srv = self.create_service_proxy('/spot_entrance/disconnect', Trigger)
         
         # Initialize the state machine after setting up services
         super().__init__()

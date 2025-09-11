@@ -327,7 +327,7 @@ class SpotRobotManager:
         rospy.loginfo("Robot manager shutdown")
 
 if __name__ == '__main__':
-    rospy.init_node('spot_robot_manager')
+    rospy.init_node('spot_entrance')
     manager = SpotRobotManager()
     rospy.on_shutdown(manager.shutdown)
     rospy.spin()
