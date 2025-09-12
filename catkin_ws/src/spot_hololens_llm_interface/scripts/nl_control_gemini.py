@@ -51,7 +51,6 @@ RULES:
 6. Use ABSOLUTE vision frame coordinates for movements - calculate target position from current position
 7. For movements, calculate: target_x = current_x + desired_movement_x, target_y = current_y + desired_movement_y
 
-
 PLANNING PROCESS:
 1. Parse user command to identify destinations in order
 2. Calculate absolute vision frame coordinates for each destination
@@ -61,13 +60,6 @@ PLANNING PROCESS:
 
 OUTPUT FORMAT:
 Return only the action list, one action per line.
-
-EXAMPLE:
-If robot is at (0.0, 0.0) and needs to go to vegetables at (1.0, 0.0):
-- start_moving, x=1.0, y=0.0, yaw=0.0, frame="vision"
-
-If robot is at (1.0, 0.0) and needs to go to fruits at (3.0, 0.0):
-- start_moving, x=3.0, y=0.0, yaw=0.0, frame="vision"
 
 Actions:"""
 
