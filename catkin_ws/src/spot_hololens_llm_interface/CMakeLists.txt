@@ -73,6 +73,7 @@ add_service_files(
 ## Generate actions in the 'action' folder
 add_action_files(
   FILES
+  AutomatedGrasp.action
   DetectObject.action
   GraspObject.action
   InteractiveGrasp.action

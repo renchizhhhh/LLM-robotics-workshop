@@ -33,6 +33,12 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
         <param name="dummy_mode" value="true"/>
     </node>
     
+    <!-- orchestra in dummy mode -->
+    <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
+        <param name="dummy_mode" value="true"/>
+        <param name="mode" value="HA"/>
+    </node>
+
     <!-- HoloLens Unity ROS TCP Endpoint -->
     <arg name="tcp_ip" default="0.0.0.0"/>
     <arg name="tcp_port" default="10000"/>
