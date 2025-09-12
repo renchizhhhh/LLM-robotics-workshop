@@ -122,6 +122,8 @@ class SpotRobotManager:
             return TriggerResponse(success=True, message="Connected to robot (dummy)")
         
         try:
+            if self.is_connected:
+                return TriggerResponse(success=True, message="Already connected to robot")
             self.robot.time_sync.wait_for_sync()
             self.verify_estop()
             
@@ -189,6 +191,8 @@ class SpotRobotManager:
         try:
             if not self.is_connected:
                 return TriggerResponse(success=False, message="Not connected to robot")
+            if self.is_powered:
+                return TriggerResponse(success=True, message="Robot already powered on")
                 
             rospy.loginfo("Powering on robot...")
             self.robot.power_on(timeout_sec=20)

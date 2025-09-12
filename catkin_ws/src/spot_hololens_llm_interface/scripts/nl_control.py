@@ -243,7 +243,7 @@ class NaturalLanguageControl:
 
 def main():
     # Configuration: True=speech, False=terminal
-    USE_SPEECH = False
+    USE_SPEECH = True
     
     try:
         controller = NaturalLanguageControl(use_speech=USE_SPEECH)
