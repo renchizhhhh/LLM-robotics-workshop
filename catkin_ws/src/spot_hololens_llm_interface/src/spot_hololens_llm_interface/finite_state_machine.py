@@ -72,7 +72,7 @@ class SpotStateMachine(StateMachine):
         self.move_x = 0.0
         self.move_y = 0.0
         self.move_yaw = 0.0
-        self.move_frame = "body"
+        self.move_frame = "vision"
     
         
     # State entry methods - call services when states change
