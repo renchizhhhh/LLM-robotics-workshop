@@ -85,16 +85,23 @@ class ExperimentOrchestrator(object):
         self.dummy_mode = rospy.get_param('~dummy_mode', False)
         self.spot_fsm = SpotStateMachine(dummy_mode=self.dummy_mode)
 
-        # Connect + power on (same flow as nl_control)
-        rospy.loginfo("Orchestrator: auto-connecting Spot ...")
-        recorder.publish_event('start_connect')
-        self.spot_fsm.send("connect")
-        recorder.publish_event('stop_connect')
+        cur_state = None
+        cur_state = getattr(self.spot_fsm.current_state, 'name', None) or str(self.spot_fsm.current_state)
 
-        recorder.publish_event('start_power_on')
-        self.spot_fsm.send("power_on")
-        recorder.publish_event('stop_power_on')
-        rospy.loginfo("Orchestrator: Spot ready.")
+        rospy.loginfo("Orchestrator: FSM reported initial state: %s", cur_state)
+
+        if cur_state in ("disconnected", "unknown"):
+            rospy.loginfo("Orchestrator: auto-connecting Spot ...")
+            recorder.publish_event('start_connect')
+            self.spot_fsm.send("connect")
+            recorder.publish_event('stop_connect')
+
+        if cur_state in ("connected", "disconnected", "powered_off", "unknown"):
+            recorder.publish_event('start_power_on')
+            self.spot_fsm.send("power_on")
+            recorder.publish_event('stop_power_on')
+
+        rospy.loginfo("Orchestrator: Spot initialization sequence finished.")
 
         # Publishers to HoloLens
         self.pub_interpretation = rospy.Publisher('/llm_int/interpretation', String, queue_size=10)

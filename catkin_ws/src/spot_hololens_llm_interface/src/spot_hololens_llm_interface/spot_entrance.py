@@ -20,11 +20,11 @@ from spot_hololens_llm_interface.spot_shared_services import SpotSharedServices
 from spot_hololens_llm_interface.spot_grasp_action_server import SpotGraspActionServer
 
 class SpotRobotManager:
-    def __init__(self, ready_for_command=True, start_services=True, arm_action_server=True, dummy_mode=False):
+    def __init__(self, hostname, ready_for_command=True, start_services=True, 
+                 arm_action_server=True, dummy_mode=False, verbose=False):
         # Get parameters
-        self.dummy_mode = dummy_mode or rospy.get_param('~dummy_mode', False)
-        self.hostname = rospy.get_param('~hostname', None)
-        self.verbose = rospy.get_param('~verbose', False)
+        self.dummy_mode = dummy_mode
+        
         
         if self.dummy_mode:
             rospy.loginfo("Spot Robot Manager starting in DUMMY MODE - no real robot connection")
@@ -38,14 +38,14 @@ class SpotRobotManager:
             self.image_client = None
             self.manipulation_api_client = None
         else:
-            if self.hostname is None:
+            if hostname is None:
                 rospy.logerr("No hostname specified!")
                 return
                 
             # Initialize robot connection
-            bosdyn.client.util.setup_logging(self.verbose)
+            bosdyn.client.util.setup_logging(verbose)
             self.sdk = bosdyn.client.create_standard_sdk('SpotRobotManager')
-            self.robot = self.sdk.create_robot(self.hostname)
+            self.robot = self.sdk.create_robot(hostname)
             bosdyn.client.util.authenticate(self.robot)
             rospy.loginfo("Spot entrance authenticated with robot using provided credentials")
             
@@ -63,7 +63,7 @@ class SpotRobotManager:
         self.is_standing = False
         self.initial_pose = None
         
-        # Setup basic services
+    # Setup basic services
         self.srv_connect = rospy.Service('~connect', Trigger, self.handle_connect)
         self.srv_disconnect = rospy.Service('~disconnect', Trigger, self.handle_disconnect)
         self.srv_power_on = rospy.Service('~power_on', Trigger, self.handle_power_on)
@@ -73,7 +73,6 @@ class SpotRobotManager:
 
         # Publishers
         self.pub_robot_state = rospy.Publisher('~robot_state', String, queue_size=1)
-        self.pub_power_state = rospy.Publisher('~power_state', Bool, queue_size=1)
         
         # Status publisher timer
         self.status_timer = rospy.Timer(rospy.Duration(1.0), self.publish_status)
@@ -85,6 +84,7 @@ class SpotRobotManager:
         if arm_action_server:
             self.grasp_action_server = SpotGraspActionServer(self)
 
+        # Only auto-connect / auto-power if explicitly enabled (allow external orchestrator to control)
         if ready_for_command:
             self.handle_connect(None)
             self.handle_power_on(None)
@@ -301,20 +301,19 @@ class SpotRobotManager:
             return TriggerResponse(success=False, message=f"Failed to sit: {str(e)}")
     
     def publish_status(self, event):
-        """Publish robot status information; TODO: align with the state machine"""
-        if self.is_connected:
-            self.pub_power_state.publish(self.is_powered)
-            
-            state = "DISCONNECTED"
-            if self.is_connected:
-                if not self.is_powered:
-                    state = "CONNECTED_OFF"
-                elif self.is_standing:
-                    state = "STANDING"
-                else:
-                    state = "SITTING"
-            
-            self.pub_robot_state.publish(state)
+        """Publish concise robot status for other nodes to consume."""
+        try:
+            connected = bool(self.is_connected)
+            powered = bool(self.is_powered)
+            standing = bool(self.is_standing)
+            status_str = f"connected:{str(connected).lower()},powered:{str(powered).lower()},standing:{str(standing).lower()}"
+
+            try:
+                self.pub_robot_state.publish(String(data=status_str))
+            except Exception as e:
+                rospy.logwarn(f"Failed to publish robot_state: {e}")
+        except Exception as e:
+            rospy.logwarn(f"Error building robot status: {e}")
     
     def shutdown(self):
         """Shutdown the robot manager"""
@@ -332,6 +331,17 @@ class SpotRobotManager:
 
 if __name__ == '__main__':
     rospy.init_node('spot_entrance')
-    manager = SpotRobotManager()
+    # Allow overriding the auto-connect behavior via ROS params
+    ready_for_command = rospy.get_param('~ready_for_command', rospy.get_param('ready_for_command', True))
+    start_services = rospy.get_param('~start_services', rospy.get_param('start_services', True))
+    arm_action_server = rospy.get_param('~arm_action_server', rospy.get_param('arm_action_server', True))
+    dummy_mode = rospy.get_param('~dummy_mode', False)
+    verbose = rospy.get_param('~verbose', False)
+    hostname = rospy.get_param('~hostname', None)
+    
+    manager = SpotRobotManager(hostname=hostname, ready_for_command=ready_for_command,
+                               start_services=start_services,
+                               arm_action_server=arm_action_server,
+                               dummy_mode=dummy_mode, verbose=verbose)
     rospy.on_shutdown(manager.shutdown)
     rospy.spin()
