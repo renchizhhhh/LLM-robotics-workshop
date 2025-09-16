@@ -21,7 +21,8 @@ Return one action per line, format:
 - "stand_up"
 - "sit_down"
 - "start_moving", x=<float> y=<float> yaw=<float> frame=body
-- "arm_command", command_type="open|close|stow|carry
+- "arm_command", command_type=open|close|stow|carry
+- "start_automated_grasp", object_type=user_specified
 
 Command: {command}
 Current robot state: {current_state}
@@ -285,6 +286,7 @@ class ExperimentOrchestrator(object):
             "action": actions,
         }
         self._publish_interpretation(json.dumps(payload))
+        rospy.loginfo(f"Orchestrator: LA mode: LLM returned action: {actions}")
         self._execute_actions(actions, label="LA command")
 
     def _handle_ha(self, utterance):
@@ -294,6 +296,7 @@ class ExperimentOrchestrator(object):
             task=utterance,
             current_state=self.spot_fsm.current_state.name,
         )
+        rospy.loginfo(f"Orchestrator: HA mode: LLM returned action: {actions}")
 
         payload = {
             "plan_id": self.state.current_plan_id,
@@ -318,17 +321,15 @@ class ExperimentOrchestrator(object):
             return False
         
         ok_all = True
-        if self.dummy_mode:
-            return ok_all
+        # if self.dummy_mode:
+        #     return ok_all
         
         with self._exec_lock:
             self._publish_feedback(f"[exec] Starting {label} ({len(actions)} step(s))")
             for i, action in enumerate(actions, 1):
                 try:
                     self._publish_feedback(f"[exec] Step {i}/{len(actions)}: {action}")
-                    # Determine event name only (word before params)
                     event = action.split()[0] if ' ' in action else action.split(',')[0]
-                    # Dispatch to FSM; support either "name key=val ..." or bare "name"
                     if '=' in action or ' ' in action:
                         # Parse params in a robust way
                         words = [w for w in re.split(r'[,\s]+', action.strip()) if w]
@@ -349,6 +350,7 @@ class ExperimentOrchestrator(object):
                                         params[k] = v
                                 except Exception:
                                     params[k] = v
+                        rospy.loginfo(f"Orchestrator: executing action '{action_name}' with params {params}")
                         self.spot_fsm.send(action_name, **params)
                     else:
                         self.spot_fsm.send(action.strip())

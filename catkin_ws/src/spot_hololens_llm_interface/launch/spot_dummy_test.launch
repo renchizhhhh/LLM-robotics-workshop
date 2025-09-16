@@ -9,7 +9,7 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     
     <!-- Parameters -->
     <arg name="verbose" default="false" />
-    <arg name="dummy_mode" default="false" />
+    <arg name="dummy_mode" default="true" />
     <!-- Dummy Estop ROS node - provides estop services without real robot -->
     <node
         pkg="spot_hololens_llm_interface"
@@ -33,7 +33,7 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     <!-- orchestra in dummy mode -->
     <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
         <param name="dummy_mode" value="$(arg dummy_mode)"/>
-        <param name="mode" value="HA"/>
+        <param name="mode" value="LA"/>
     </node>
 
     <!-- HoloLens Unity ROS TCP Endpoint -->

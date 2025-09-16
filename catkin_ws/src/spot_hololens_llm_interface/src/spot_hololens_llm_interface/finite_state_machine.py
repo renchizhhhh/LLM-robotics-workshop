@@ -34,7 +34,7 @@ class SpotStateMachine(StateMachine):
     sit = State()
     stand = State()
     moving = State()
-    grasping = State()  # New state for grasping
+    grasping = State()
 
     # Transitions
     discover_connected = unknown.to(connected)
@@ -218,13 +218,13 @@ class SpotStateMachine(StateMachine):
     def on_enter_grasping(self):
         # Get parameters from kwargs
         kwargs = getattr(self, '_current_kwargs', {})
-        image_source = kwargs.get('image_source', 'hand_color_image')
         object_type = kwargs.get('object_type', 'cup')
+        image_source = kwargs.get('image_source', 'hand_color_image')
         force_top_down_grasp = kwargs.get('force_top_down_grasp', False)
         force_horizontal_grasp = kwargs.get('force_horizontal_grasp', True)
         force_45_angle_grasp = kwargs.get('force_45_angle_grasp', False)
         force_squeeze_grasp = kwargs.get('force_squeeze_grasp', False)
-        return_to_initial_pose = kwargs.get('return_to_initial_pose', True)
+        return_to_initial_pose = kwargs.get('return_to_initial_pose', False)
         
         rospy.loginfo(f"FSM: Starting automated grasp for {object_type} using {image_source}")
         recorder.publish_event('start_automated_grasp')
@@ -324,6 +324,7 @@ class SpotStateMachine(StateMachine):
                              force_horizontal_grasp=True, force_45_angle_grasp=False, 
                              force_squeeze_grasp=False, return_to_initial_pose=True):
         """Helper to call automated grasp action"""
+        # TODO: remove return to initial_pose 
         if self.dummy_mode:
             rospy.loginfo(f"FSM: DUMMY MODE - Simulating automated grasp for {object_type}")
             rospy.sleep(2.0)  # Simulate time for grasp in dummy mode

@@ -61,13 +61,7 @@ def test_state_machine_grasp():
     
     # Execute automated grasp with parameters
     spot.send('start_automated_grasp',
-              image_source=image_source,
-              object_type=object_type,
-              force_top_down_grasp=False,
-              force_horizontal_grasp=True,
-              force_45_angle_grasp=False,
-              force_squeeze_grasp=False,
-              return_to_initial_pose=True)
+              object_type=object_type)
     
     wait_timeout = 60.0  # seconds - max time to wait for grasp to complete
     poll_interval = 1.0  # seconds
