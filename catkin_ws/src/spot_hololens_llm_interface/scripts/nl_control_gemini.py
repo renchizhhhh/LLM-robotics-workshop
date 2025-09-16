@@ -23,7 +23,7 @@ CURRENT STATE:
 - Robot state: {current_state}
 - Current position (vision frame): {current_position}
 
-WORLD LAYOUT (vision frame coordinates):
+WORLD LAYOUT (body frame coordinates):
 - Vegetables: (1.0, 0.0, 0.0)
 - Fruits: (3.0, 0.0, 0.0)  
 - Meat: (5.0, 0.0, 0.0)
@@ -31,13 +31,13 @@ WORLD LAYOUT (vision frame coordinates):
 
 ROBOT SPECS:
 - Size: 0.6m wide × 1.2m long
-- Movement: Uses vision frame for precise positioning
-- Coordinate system: x=forward, y=left, yaw=rotation (vision frame)
+- Movement: Uses body frame for positioning
+- Coordinate system: x=forward, y=left, yaw=rotation (body frame)
 
 AVAILABLE ACTIONS:
 - stand_up
 - sit_down  
-- start_moving, x=float, y=float, yaw=float, frame="vision"
+- start_moving, x=float, y=float, yaw=float, frame="body"
 - get_image, image_source="camera_name"
 - get_initial_pose
 - arm_command, command_type="open|close|stow|carry"
@@ -48,15 +48,16 @@ RULES:
 3. Account for full robot body (1.1m long, 0.5m wide) when checking collisions
 4. One action per line, no quotes/brackets, no numbering
 5. Only use "stand_up" if robot is not already standing or moving
-6. Use ABSOLUTE vision frame coordinates for movements - calculate target position from current position
-7. For movements, calculate: target_x = current_x + desired_movement_x, target_y = current_y + desired_movement_y
+6. In one move, the robot can either move in the x direction, the y direction, or the yaw direction, not two or three at once.
+7. Use RELATIVE body frame coordinates for movements - each movement is relative to current position
+8. For movements, calculate: move_x = target_x - current_x, move_y = target_y - current_y
 
 PLANNING PROCESS:
 1. Parse user command to identify destinations in order
-2. Calculate absolute vision frame coordinates for each destination
+2. Calculate relative body frame movements from current position to each destination
 3. Plan collision-free path visiting each destination once in order
 4. Check each movement segment for robot-obstacle collision
-5. Generate action sequence with absolute vision frame coordinates
+5. Generate action sequence with relative body frame movements
 
 OUTPUT FORMAT:
 Return only the action list, one action per line.
@@ -69,7 +70,8 @@ class NaturalLanguageControl:
         self.use_speech = use_speech
         
         # Position tracking - will get actual position from robot
-        self.current_position = [0.0, 0.0, 0.0]  # [x, y, z] in meters
+        self.current_position = [0.0, 0.0, 0.0]  # [x, y, yaw] relative to start position
+        self.start_position = None  # Will be set on first position read
         
         # Check if dummy mode is set globally
         dummy_mode = rospy.get_param('/spot_fsm/dummy_mode', False)
@@ -102,7 +104,7 @@ class NaturalLanguageControl:
         rospy.loginfo("Ready")
         
     def get_actual_robot_position(self):
-        """Get actual robot position from vision frame (camera-based odometry)."""
+        """Get actual robot position and convert to body frame coordinates."""
         try:
             # Get robot pose from the service (returns vision frame position)
             response = self.spot_fsm.get_robot_pose()
@@ -118,8 +120,39 @@ class NaturalLanguageControl:
                 quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
                 _, _, yaw = euler_from_quaternion(quat)
                 
-                self.current_position = [x, y, yaw]
-                rospy.loginfo(f"Actual robot position (vision frame): {self.current_position}")
+                # Set start position on first read
+                if self.start_position is None:
+                    self.start_position = [x, y, yaw]
+                    rospy.loginfo(f"Set start position (vision frame): {self.start_position}")
+                    self.current_position = [0.0, 0.0, 0.0]  # Start at origin
+                else:
+                    # Calculate relative position from start in vision frame
+                    vision_relative = [
+                        x - self.start_position[0],
+                        y - self.start_position[1], 
+                        yaw - self.start_position[2]
+                    ]
+                    
+                    # Transform vision frame relative position to body frame
+                    # The service gives us vision_tform_body (body pose in vision frame)
+                    # To get relative motion in body frame, we need to "undo" the rotation
+                    # that vision frame has relative to the starting body orientation
+                    
+                    # Use the starting yaw to transform coordinates back to body frame
+                    start_yaw_offset = self.start_position[2]  # Initial robot orientation in vision frame
+                    
+                    # Rotate vision frame coordinates to body frame using inverse rotation
+                    cos_offset = math.cos(-start_yaw_offset)  # Negative for inverse rotation
+                    sin_offset = math.sin(-start_yaw_offset)
+                    
+                    # Apply rotation matrix to transform vision coordinates to body coordinates
+                    self.current_position = [
+                        cos_offset * vision_relative[0] - sin_offset * vision_relative[1],  # body frame X (forward)
+                        sin_offset * vision_relative[0] + cos_offset * vision_relative[1],  # body frame Y (left)
+                        vision_relative[2]  # yaw rotation is the same
+                    ]
+                
+                rospy.loginfo(f"Current position relative to start (body frame): {self.current_position}")
                 return True
             else:
                 rospy.logwarn(f"Failed to get robot pose: {response.message}")
