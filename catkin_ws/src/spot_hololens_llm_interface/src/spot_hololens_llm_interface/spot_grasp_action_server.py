@@ -3,6 +3,8 @@
 import rospy
 import time
 import cv2
+import sys
+import select
 from cv_bridge import CvBridge
 import geometry_msgs.msg
 import tf.transformations
@@ -10,6 +12,7 @@ import tf.transformations
 import numpy as np
 import actionlib
 import threading
+from std_msgs.msg import Bool
 
 from spot_hololens_llm_interface.msg import (
     DetectObjectAction, DetectObjectGoal, DetectObjectResult, DetectObjectFeedback,
@@ -44,6 +47,9 @@ class SpotGraspActionServer:
         self.image_display = None
         self.click_event = threading.Event()
         self.window_name = None
+        # Event and subscriber for user approval during automated grasp
+        self.user_approve_event = threading.Event()
+        self.user_approve_sub = rospy.Subscriber('/user/approve_grasp', Bool, self._user_approve_callback)
         
         # Action server for interactive grasping
         self.interactive_grasp_server = actionlib.SimpleActionServer(
@@ -215,7 +221,7 @@ class SpotGraspActionServer:
             
             # Execute the grasp using direct access to manipulation API
             success, grasp_state = self._execute_grasp_at_pixel_direct(
-                pixel_x, pixel_y, image, goal, feedback
+                pixel_x, pixel_y, image, goal, feedback, action_server=self.interactive_grasp_server
             )
             
             # Return to initial pose if requested and successful
@@ -257,8 +263,24 @@ class SpotGraspActionServer:
                 cv2.line(clone, (x, 0), (x, height), color, thickness)
                 win = self.window_name if hasattr(self, 'window_name') and self.window_name else 'Click to grasp'
                 cv2.imshow(win, clone)
+
+    def _user_approve_callback(self, msg):
+        """ROS callback that sets the approval event when /user/approve_grasp becomes True.
+
+        If msg.data is False the event is cleared so subsequent approvals are explicit.
+        """
+        try:
+            if msg is None:
+                return
+            if msg.data:
+                self.user_approve_event.set()
+            else:
+                # Clear approval so a future True is required
+                self.user_approve_event.clear()
+        except Exception as e:
+            rospy.logwarn(f"Error in user approve callback: {e}")
     
-    def _execute_grasp_at_pixel_direct(self, pixel_x, pixel_y, image, goal, feedback):
+    def _execute_grasp_at_pixel_direct(self, pixel_x, pixel_y, image, goal, feedback, action_server=None):
         """Execute grasp directly using manipulation API client"""
         try:
             clients = self.robot_manager.get_clients()
@@ -313,8 +335,10 @@ class SpotGraspActionServer:
             
             # Monitor grasp progress
             while True:
+                # Use the provided action server (interactive or automated) when checking preempt
+                active_server = action_server if action_server is not None else self.interactive_grasp_server
                 # TODO: check the set_preempted() method? Maybe it's needed to cancel the action properly
-                if self.interactive_grasp_server.is_preempt_requested():
+                if active_server.is_preempt_requested():
                     return False, manipulation_api_pb2.MANIP_STATE_GRASP_FAILED
                 
                 feedback_request = manipulation_api_pb2.ManipulationApiFeedbackRequest(
@@ -327,7 +351,8 @@ class SpotGraspActionServer:
                 
                 feedback.current_state = f"GRASP_{manipulation_api_pb2.ManipulationFeedbackState.Name(api_feedback_response.current_state)}"
                 feedback.status_message = f"Manipulation state: {manipulation_api_pb2.ManipulationFeedbackState.Name(api_feedback_response.current_state)}"
-                self.interactive_grasp_server.publish_feedback(feedback)
+                # Publish feedback on the correct action server
+                active_server.publish_feedback(feedback)
                 
                 if (api_feedback_response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_SUCCEEDED or 
                     api_feedback_response.current_state == manipulation_api_pb2.MANIP_STATE_GRASP_FAILED):
@@ -632,7 +657,7 @@ class SpotGraspActionServer:
             # Save detection image with visualization
             try:
                 import os
-                os.makedirs('/Docker-LLM-Spot-Image/catkin_ws/images', exist_ok=True)
+                os.makedirs('/catkin_ws/debug', exist_ok=True)
                 
                 # Create a copy of the image for visualization to avoid modifying the original
                 img_vis = img.copy()
@@ -645,7 +670,7 @@ class SpotGraspActionServer:
                 cv2.putText(img_vis, f"Grasp {goal.object_type} at ({pixel_x}, {pixel_y})", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
-                filename = f"/Docker-LLM-Spot-Image/catkin_ws/images/grasp_{goal.object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
+                filename = f"/catkin_ws/debug/grasp_{goal.object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
                 cv2.imwrite(filename, img_vis)
                 rospy.loginfo(f"Detection image saved: {filename}")
             except Exception as e:
@@ -660,7 +685,36 @@ class SpotGraspActionServer:
             
             rospy.loginfo(f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to continue grasping...")
             try:
-                input()  # Wait for Enter key
+                rospy.loginfo("Waiting for user approval: Enter key or /user/approve_grasp == True")
+                approved = False
+                self.user_approve_event.clear()
+
+                while not rospy.is_shutdown() and not approved:
+                    if self.user_approve_event.is_set():
+                        approved = True
+                        break
+
+                    if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
+                        try:
+                            _ = sys.stdin.readline()
+                            approved = True
+                            break
+                        except Exception:
+                            pass
+
+                    # Check for action preempt/cancel
+                    if self.automated_grasp_server.is_preempt_requested():
+                        result.success = False
+                        result.message = 'Preempted by client'
+                        self.automated_grasp_server.set_preempted(result)
+                        return
+
+                if not approved:
+                    result.success = False
+                    result.message = "User cancelled or shutdown"
+                    self.automated_grasp_server.set_aborted(result)
+                    return
+                
             except KeyboardInterrupt:
                 result.success = False
                 result.message = "User cancelled grasp"
@@ -676,7 +730,7 @@ class SpotGraspActionServer:
             
             # Execute the grasp using the same helper as interactive grasp
             success, grasp_state = self._execute_grasp_at_pixel_direct(
-                pixel_x, pixel_y, image, goal, feedback
+                pixel_x, pixel_y, image, goal, feedback, action_server=self.automated_grasp_server
             )
             
             # Return to initial pose if requested and successful

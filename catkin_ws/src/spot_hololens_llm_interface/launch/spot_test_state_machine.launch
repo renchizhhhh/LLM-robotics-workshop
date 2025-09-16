@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Parameters -->
+    <arg name="dummy_mode" default="true" />
+    <arg name="hostname" default="192.168.1.109" />
+    <arg name="verbose" default="false" />
+
+    <!-- Estop ROS node (required for real robot mode) -->
+    <node if="$(eval not dummy_mode)"
+        pkg="spot_hololens_llm_interface"
+        type="estop_ros_node.py"
+        name="estop_node"
+        output="screen">
+        <param name="timeout" value="4.0"/>
+        <param name="hostname" value="$(arg hostname)"/>
+    </node>
+
+    <!-- Robot Manager Node -->
+    <node name="spot_entrance" 
+          pkg="spot_hololens_llm_interface" 
+          type="spot_entrance.py" 
+          output="screen">
+        <param name="hostname" value="$(arg hostname)" />
+        <param name="verbose" value="$(arg verbose)" />
+        <param name="dummy_mode" value="$(arg dummy_mode)" />
+    </node>
+    
+    <!-- State Machine Node -->
+    <node name="spot_state_machine" 
+          pkg="spot_hololens_llm_interface" 
+          type="finite_state_machine.py" 
+          output="screen">
+        <param name="dummy_mode" value="$(arg dummy_mode)" />
+    </node>
+    
+</launch>

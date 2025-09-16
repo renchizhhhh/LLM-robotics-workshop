@@ -21,8 +21,9 @@ Only include actions necessary to fulfill the command.
 Return one action per line, format:
 - "stand_up"
 - "sit_down"
-- "start_moving", x=<float> y=<float> yaw=<float> frame=vision
-- "arm_command", command_type="open|close|stow|carry
+- "start_moving", x=<float> y=<float> yaw=<float> frame=body
+- "arm_command", command_type=open|close|stow|carry
+- "start_automated_grasp", object_type=user_specified
 
 Command: {command}
 Current robot state: {current_state}
@@ -116,16 +117,23 @@ class ExperimentOrchestrator(object):
         self.dummy_mode = rospy.get_param('~dummy_mode', False)
         self.spot_fsm = SpotStateMachine(dummy_mode=self.dummy_mode)
 
-        # Connect + power on (same flow as nl_control)
-        rospy.loginfo("Orchestrator: auto-connecting Spot ...")
-        recorder.publish_event('start_connect')
-        self.spot_fsm.send("connect")
-        recorder.publish_event('stop_connect')
+        cur_state = None
+        cur_state = getattr(self.spot_fsm.current_state, 'name', None) or str(self.spot_fsm.current_state)
 
-        recorder.publish_event('start_power_on')
-        self.spot_fsm.send("power_on")
-        recorder.publish_event('stop_power_on')
-        rospy.loginfo("Orchestrator: Spot ready.")
+        rospy.loginfo("Orchestrator: FSM reported initial state: %s", cur_state)
+
+        if cur_state in ("disconnected", "unknown"):
+            rospy.loginfo("Orchestrator: auto-connecting Spot ...")
+            recorder.publish_event('start_connect')
+            self.spot_fsm.send("connect")
+            recorder.publish_event('stop_connect')
+
+        if cur_state in ("connected", "disconnected", "powered_off", "unknown"):
+            recorder.publish_event('start_power_on')
+            self.spot_fsm.send("power_on")
+            recorder.publish_event('stop_power_on')
+
+        rospy.loginfo("Orchestrator: Spot initialization sequence finished.")
 
         # Publishers to HoloLens
         self.pub_interpretation = rospy.Publisher('/llm_int/interpretation', String, queue_size=10)
@@ -403,6 +411,7 @@ class ExperimentOrchestrator(object):
             "action": actions,
         }
         self._publish_interpretation(json.dumps(payload))
+        rospy.loginfo(f"Orchestrator: LA mode: LLM returned action: {actions}")
         self._execute_actions(actions, label="LA command")
 
     def _handle_ha(self, utterance):
@@ -418,6 +427,7 @@ class ExperimentOrchestrator(object):
             current_state=self.spot_fsm.current_state.name,
             current_position=f"({self.state.current_position[0]:.2f}, {self.state.current_position[1]:.2f}, {self.state.current_position[2]:.2f})"
         )
+        rospy.loginfo(f"Orchestrator: HA mode: LLM returned action: {actions}")
 
         payload = {
             "plan_id": self.state.current_plan_id,
@@ -442,17 +452,15 @@ class ExperimentOrchestrator(object):
             return False
         
         ok_all = True
-        if self.dummy_mode:
-            return ok_all
+        # if self.dummy_mode:
+        #     return ok_all
         
         with self._exec_lock:
             self._publish_feedback(f"[exec] Starting {label} ({len(actions)} step(s))")
             for i, action in enumerate(actions, 1):
                 try:
                     self._publish_feedback(f"[exec] Step {i}/{len(actions)}: {action}")
-                    # Determine event name only (word before params)
                     event = action.split()[0] if ' ' in action else action.split(',')[0]
-                    # Dispatch to FSM; support either "name key=val ..." or bare "name"
                     if '=' in action or ' ' in action:
                         # Parse params in a robust way
                         words = [w for w in re.split(r'[,\s]+', action.strip()) if w]
@@ -473,6 +481,7 @@ class ExperimentOrchestrator(object):
                                         params[k] = v
                                 except Exception:
                                     params[k] = v
+                        rospy.loginfo(f"Orchestrator: executing action '{action_name}' with params {params}")
                         self.spot_fsm.send(action_name, **params)
                     else:
                         self.spot_fsm.send(action.strip())

@@ -9,34 +9,31 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     
     <!-- Parameters -->
     <arg name="verbose" default="false" />
-    
+    <arg name="dummy_mode" default="true" />
     <!-- Dummy Estop ROS node - provides estop services without real robot -->
     <node
         pkg="spot_hololens_llm_interface"
         type="estop_ros_node.py"
         name="estop_node"
         output="screen">
-        <param name="dummy_mode" value="true"/>
+        <param name="dummy_mode" value="$(arg dummy_mode)"/>
         <param name="timeout" value="4.0"/>
-        <param name="hostname" value="dummy"/>  <!-- Dummy hostname for dummy mode -->
+        <param name="hostname" value="192.168.1.109"/>  <!-- Dummy hostname for dummy mode -->
     </node>
 
     <!-- Spot Robot Manager in dummy mode - provides all services without real robot -->
     <node name="spot_entrance" pkg="spot_hololens_llm_interface" type="spot_entrance.py" output="screen">
-        <param name="dummy_mode" value="true"/>
-        <param name="hostname" value="dummy"/>  <!-- Dummy hostname for dummy mode -->
-        <param name="verbose" value="$(arg verbose)" />
+        <param name="dummy_mode" value="$(arg dummy_mode)"/>
+        <param name="hostname" value="192.168.1.109"/>  <!-- Dummy hostname for dummy mode -->
+        <param name="ready_for_command" value="false"/>
+        <param name="verbose" value="$(arg verbose)"/>
     </node>
     
-    <!-- FSM in dummy mode -->
-    <node name="spot_fsm" pkg="spot_hololens_llm_interface" type="finite_state_machine.py" output="screen">
-        <param name="dummy_mode" value="true"/>
-    </node>
     
     <!-- orchestra in dummy mode -->
     <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
-        <param name="dummy_mode" value="true"/>
-        <param name="mode" value="HA"/>
+        <param name="dummy_mode" value="$(arg dummy_mode)"/>
+        <param name="mode" value="LA"/>
     </node>
 
     <!-- HoloLens Unity ROS TCP Endpoint -->
