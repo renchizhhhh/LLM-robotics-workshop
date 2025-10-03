@@ -12,7 +12,8 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'spot_hololens_llm_interface'))
 from finite_state_machine import SpotStateMachine 
 from timing_utils import recorder          
-import openai 
+import openai
+from google import genai 
 
 LA_PROMPT = """\
 You are converting a natural-language command into 1-2 Spot FSM actions.
@@ -109,11 +110,14 @@ class ExperimentState(object):
         self.stop_requested = False
         self.lock = threading.Lock()
         self.awaiting_approval = False
+        # Position tracking for HA mode  
+        self.current_position = [0.0, 0.0, 0.0]  # [x, y, yaw] relative to start position
+        self.start_position = None  # Will be set on first position read
 
 class ExperimentOrchestrator(object):
     def __init__(self):
         rospy.init_node('experiment_orchestrator', anonymous=True)
-        self.state = ExperimentState(mode=rospy.get_param('~mode', 'LA').upper())
+        self.state = ExperimentState(mode=rospy.get_param('~mode', 'HA').upper())
 
         # FSM wrapper (service/action client under the hood)
         self.dummy_mode = rospy.get_param('~dummy_mode', False)
@@ -163,30 +167,112 @@ class ExperimentOrchestrator(object):
 
     # ---------- LLM ----------
     def _setup_llm(self):
-        api_key = os.getenv('OPENAI_API_KEY')
-        if openai is None or not api_key:
+        # Setup OpenAI for LA mode (GPT-5)
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if openai is None or not openai_api_key:
             raise Exception("No OpenAI service available. Please check the API key.")
-        self.llm = openai.OpenAI(api_key=api_key)
+        self.openai_client = openai.OpenAI(api_key=openai_api_key)
+        
+        # Setup Gemini for HA mode (Gemini Pro 2.5)
+        google_api_key = os.getenv('GOOGLE_API_KEY')
+        if not google_api_key:
+            rospy.logwarn("No GOOGLE_API_KEY - HA mode will use OpenAI as fallback")
+            self.gemini_client = None
+        else:
+            self.gemini_client = genai.Client(api_key=google_api_key)
 
-    def _llm_actions(self, prompt_tmpl, **fmt):
-        if not self.llm:
-            return None
+    def _get_actual_robot_position(self):
+        """Get actual robot position and convert to body frame coordinates."""
         try:
-            formatted = prompt_tmpl.format(**fmt)
-            recorder.publish_event('start_llm_processing')
-            resp = self.llm.responses.create(
-                model="gpt-5",
-                input=formatted,
-                reasoning={"effort": "minimal"},
-            )
-            recorder.publish_event('stop_llm_processing')
-            txt = (resp.output_text or "").strip()
-            actions = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-            return actions or None
+            # Get robot pose from the service (returns vision frame position)
+            response = self.spot_fsm.get_robot_pose()
+            if response.success:
+                # Extract position from the pose
+                pose = response.robot_pose.pose
+                x = pose.position.x
+                y = pose.position.y
+                z = pose.position.z
+                
+                # Convert quaternion to yaw
+                from tf.transformations import euler_from_quaternion
+                quat = [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w]
+                _, _, yaw = euler_from_quaternion(quat)
+                
+                # Set start position on first read
+                if self.state.start_position is None:
+                    self.state.start_position = [x, y, yaw]
+                    rospy.loginfo(f"Set start position (vision frame): {self.state.start_position}")
+                    self.state.current_position = [0.0, 0.0, 0.0]  # Start at origin
+                else:
+                    # Calculate relative position from start in vision frame
+                    vision_relative = [
+                        x - self.state.start_position[0],
+                        y - self.state.start_position[1], 
+                        yaw - self.state.start_position[2]
+                    ]
+                    
+                    # Transform vision frame relative position to body frame
+                    # Use the starting yaw to transform coordinates back to body frame
+                    start_yaw_offset = self.state.start_position[2]  # Initial robot orientation in vision frame
+                    
+                    # Rotate vision frame coordinates to body frame using inverse rotation
+                    cos_offset = math.cos(-start_yaw_offset)  # Negative for inverse rotation
+                    sin_offset = math.sin(-start_yaw_offset)
+                    
+                    # Apply rotation matrix to transform vision coordinates to body coordinates
+                    self.state.current_position = [
+                        cos_offset * vision_relative[0] - sin_offset * vision_relative[1],  # body frame X (forward)
+                        sin_offset * vision_relative[0] + cos_offset * vision_relative[1],  # body frame Y (left)
+                        vision_relative[2]  # yaw rotation is the same
+                    ]
+                
+                rospy.loginfo(f"Current position relative to start (body frame): {self.state.current_position}")
+                return True
+            else:
+                rospy.logwarn(f"Failed to get robot pose: {response.message}")
+                return False
         except Exception as e:
-            rospy.logerr("LLM failure: %s", str(e))
-            recorder.publish_event('stop_llm_processing')
-            return None
+            rospy.logerr(f"Error getting robot position: {e}")
+            return False
+
+    def _llm_actions(self, prompt_tmpl, use_gemini=False, **fmt):
+        if use_gemini and self.gemini_client:
+            # Use Gemini Pro 2.5 for HA mode
+            try:
+                formatted = prompt_tmpl.format(**fmt)
+                recorder.publish_event('start_llm_processing')
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=formatted
+                )
+                recorder.publish_event('stop_llm_processing')
+                txt = response.text.strip()
+                actions = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+                return actions or None
+            except Exception as e:
+                rospy.logerr("Gemini LLM failure: %s", str(e))
+                recorder.publish_event('stop_llm_processing')
+                return None
+        else:
+            # Use GPT-5 for LA mode or fallback
+            if not self.openai_client:
+                return None
+            try:
+                formatted = prompt_tmpl.format(**fmt)
+                recorder.publish_event('start_llm_processing')
+                resp = self.openai_client.responses.create(
+                    model="gpt-5",
+                    input=formatted,
+                    reasoning={"effort": "minimal"},
+                )
+                recorder.publish_event('stop_llm_processing')
+                txt = (resp.output_text or "").strip()
+                actions = [ln.strip() for ln in txt.splitlines() if ln.strip()]
+                return actions or None
+            except Exception as e:
+                rospy.logerr("OpenAI LLM failure: %s", str(e))
+                recorder.publish_event('stop_llm_processing')
+                return None
 
     # ---------- Parsing (LA rule-based) ----------
     def _parse_la_to_actions(self, command):
@@ -194,6 +280,7 @@ class ExperimentOrchestrator(object):
         # fallback to LLM (single-command)
         actions = self._llm_actions(
             LA_PROMPT,
+            use_gemini=False,
             command=command,
             current_state=self.spot_fsm.current_state.name,
         )
@@ -224,6 +311,17 @@ class ExperimentOrchestrator(object):
         if not utterance:
             return
 
+        # Add duplicate command detection
+        import time
+        if hasattr(self, '_last_command') and self._last_command == utterance:
+            if hasattr(self, '_last_command_time') and (time.time() - self._last_command_time) < 5.0:
+                rospy.logwarn(f"Ignoring duplicate command within 5 seconds: '{utterance}'")
+                return
+        
+        self._last_command = utterance
+        self._last_command_time = time.time()
+        
+        rospy.loginfo(f"Processing command: '{utterance}'")
         recorder.publish_event('received_hololens_input')
         mode = self.state.mode
 
@@ -310,10 +408,16 @@ class ExperimentOrchestrator(object):
 
     def _handle_ha(self, utterance):
         """High Autonomy: generate a plan, show it, and wait for approval to execute."""
+        # Get actual robot position for HA planning
+        if not self._get_actual_robot_position():
+            rospy.logwarn("Using last known position for HA planning")
+        
         actions = self._llm_actions(
             HA_PROMPT,
+            use_gemini=True,
             task=utterance,
             current_state=self.spot_fsm.current_state.name,
+            current_position=f"({self.state.current_position[0]:.2f}, {self.state.current_position[1]:.2f}, {self.state.current_position[2]:.2f})"
         )
         rospy.loginfo(f"Orchestrator: HA mode: LLM returned action: {actions}")
 

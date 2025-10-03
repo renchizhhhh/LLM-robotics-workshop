@@ -36,6 +36,10 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
         <param name="mode" value="HA"/>
     </node>
 
+    <!-- Spot Robot Simulation GUI for dummy mode -->
+    <node if="$(arg dummy_mode)" name="spot_simulation_gui" pkg="spot_hololens_llm_interface" type="spot_simulation_gui.py" output="screen">
+    </node>
+
     <!-- HoloLens Unity ROS TCP Endpoint -->
     <arg name="tcp_ip" default="0.0.0.0"/>
     <arg name="tcp_port" default="10000"/>
