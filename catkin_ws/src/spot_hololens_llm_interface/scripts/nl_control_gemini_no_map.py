@@ -17,15 +17,11 @@ from finite_state_machine import SpotStateMachine
 from timing_utils import recorder
 
 # LLM prompt for converting natural language to FSM commands
-PROMPT = """You are a path planning system for a Boston Dynamics Spot robot.
+PROMPT = """You are a control system for a Boston Dynamics Spot robot.
 
 CURRENT STATE:
 - Robot state: {current_state}
-- Current position (vision frame): {current_position}
-
-WORLD LAYOUT (vision frame coordinates):
-- Pick-up location: (2.0, -1.0, 0.0) - Robot faces forward (yaw=0) when picking up (rechts van robot)
-- Drop-off location: (2.0, 0.5, 0.0) - Robot faces left (yaw=1.57 radians) when dropping off (links van robot)
+- Current position (body frame): {current_position}
 
 ROBOT SPECS:
 - Size: 0.7m wide × 1.4m long
@@ -43,25 +39,20 @@ AVAILABLE ACTIONS:
 - start_arm_command, command_type=open|close|stow|carry
 
 RULES:
-1. Visit destinations in EXACT order specified by user
-2. One action per line, no quotes/brackets, no numbering
-3. Robot must be in standing mode before moving and grasping
-4. Only use "stand_up" if robot is not already standing, moving or grasping
-5. In one move, the robot can either move in the x direction, the y direction, or the yaw direction, not two or three at once.
-6. Use RELATIVE body frame coordinates for movements - each movement is relative to current position
-7. For movements, calculate: move_x = target_x - current_x, move_y = target_y - current_y
-8. For pick-up: walk to pick-up location and face forward (yaw=0)
-9. For drop-off: walk to drop-off location and face left (yaw=1.57 radians)
-10. Use EXACT object name from user command for object_type (e.g., "tomato can" not "tomato")
-11. For drop-off procedure: start_move_arm_pose to (0.8, 0.0, 0.3) with quaternion (0.7071, 0.7071, 0.0, 0.0) for gripper pointing down (this is the arm pose for dropping off objects) in 1 second, then start_arm_command open, then start_arm_command close, then start_arm_command stow
+1. One action per line, no quotes/brackets, no numbering
+2. Robot must be in standing mode before moving and grasping
+3. Only use "stand_up" if robot is not already standing, moving or grasping
+4. In one move, the robot can either move in the x direction, the y direction, or the yaw direction, not two or three at once.
+5. Use RELATIVE body frame coordinates for movements - each movement is relative to current position
+6. For movements, calculate: move_x = target_x - current_x, move_y = target_y - current_y
+7. Use EXACT object name from user command for object_type (e.g., "tomato can" not "tomato")
+8. For object manipulation: use start_automated_grasp to pick up objects, then use start_move_arm_pose and start_arm_command to place/release objects
 
 PLANNING PROCESS:
-1. Parse user command to identify destinations in order
-2. Calculate relative body frame movements from current position to each destination
-3. Plan path visiting each destination once in order
-4. Ensure correct robot orientation at each destination (yaw=0 for pick-up, yaw=1.57 radians for drop-off)
-5. For drop-off locations: add drop-off procedure (start_move_arm_pose, start_arm_command open, start_arm_command close, start_arm_command stow)
-6. Generate action sequence with relative body frame movements
+1. Parse user command to understand the task
+2. Calculate relative body frame movements from current position to target locations
+3. Plan path with appropriate movements and manipulations
+4. Generate action sequence with relative body frame movements
 
 OUTPUT FORMAT:
 Return only the action list, one action per line.
@@ -408,7 +399,7 @@ class NaturalLanguageControl:
     
     
     def process_command(self, command):
-        """Process natural language command."""
+        """Process command - either fixed plan or natural language."""
         # Check for stop signal before processing new command
         if self.stop_requested:
             rospy.loginfo("Stop signal received - ignoring new command until stop is cleared")
@@ -418,21 +409,54 @@ class NaturalLanguageControl:
         self.stop_requested = False
             
         current_state = self.spot_fsm.current_state.name
-        print(f"\nProcessing: {command}")
-        print(f"Current robot state: {current_state}")
+        print(f"\nCurrent robot state: {current_state}")
         
-        # Publish timing event for HoloLens input received (when ROS starts processing)
-        recorder.publish_event('received_hololens_input')
-        
-        # Process with LLM immediately after receiving command
-        actions = self.parse_command(command)
-        if not actions:
-            print("Parse failed - try a different command")
-            return
-        
-        print(f"\nLLM Generated Plan:")
-        for i, action in enumerate(actions, 1):
-            print(f"  {i}. {action}")
+        # Check if user wants standard plan or natural language
+        if command.lower() == "standard":
+            # Fixed plan - always the same sequence
+            actions = [
+                "start_automated_grasp, object_type=\"tomato can\"",
+                "start_arm_command, command_type=open",
+                "start_arm_command, command_type=close", 
+                "start_arm_command, command_type=stow"
+            ]
+            
+            print(f"\nFixed Plan:")
+            for i, action in enumerate(actions, 1):
+                print(f"  {i}. {action}")
+        elif command.lower().startswith("nl "):
+            # Natural language processing - remove "nl " prefix
+            nl_command = command[3:].strip()
+            print(f"\nProcessing: {nl_command}")
+            
+            # Publish timing event for HoloLens input received (when ROS starts processing)
+            recorder.publish_event('received_hololens_input')
+            
+            # Process with LLM
+            actions = self.parse_command(nl_command)
+            if not actions:
+                print("Parse failed - try a different command")
+                return
+            
+            print(f"\nLLM Generated Plan:")
+            for i, action in enumerate(actions, 1):
+                print(f"  {i}. {action}")
+        else:
+            # Direct natural language command (for backward compatibility)
+            print(f"\nProcessing: {command}")
+            
+            # Publish timing event for HoloLens input received (when ROS starts processing)
+            recorder.publish_event('received_hololens_input')
+            
+            # Process with LLM
+            actions = self.parse_command(command)
+            if not actions:
+                print("Parse failed - try a different command")
+                return
+            
+            print(f"\nLLM Generated Plan:")
+            for i, action in enumerate(actions, 1):
+                print(f"  {i}. {action}")
         
         # Publish timing event for user confirmation start
         recorder.publish_event('start_user_confirmation')
@@ -446,12 +470,16 @@ class NaturalLanguageControl:
             print("Executing...")
             self.execute_actions(actions)
         else:
-            print("Cancelled - try a new command")
+            print("Cancelled - try again")
     
     def run(self):
         """Main loop."""
-        print("\nNatural Language Control Ready!")
-        print("Type commands or 'quit' to exit\n")
+        print("\nRobot Control Ready!")
+        print("Type 'standard' for fixed plan, 'nl' for natural language, or 'quit' to exit")
+        print("Examples:")
+        print("  standard - Execute the fixed tomato can plan")
+        print("  nl 'Pick up the bottle' - Use natural language control")
+        print("  quit - Exit the program\n")
         
         while not rospy.is_shutdown():
             try:

@@ -16,68 +16,117 @@ from finite_state_machine import SpotStateMachine
 # Import timing utilities
 from timing_utils import recorder
 
-# LLM prompt for converting natural language to FSM commands
-PROMPT = """You are a path planning system for a Boston Dynamics Spot robot.
+# Import world manager
+from world_manager import WorldManager
 
-CURRENT STATE:
-- Robot state: {current_state}
-- Current position (vision frame): {current_position}
+# Universal Spot Path Planner Prompt v2
+PROMPT = """You are a path planning and action sequencing system for a Boston Dynamics Spot robot.
 
-WORLD LAYOUT (vision frame coordinates):
-- Pick-up location: (2.0, -1.0, 0.0) - Robot faces forward (yaw=0) when picking up (rechts van robot)
-- Drop-off location: (2.0, 0.5, 0.0) - Robot faces left (yaw=1.57 radians) when dropping off (links van robot)
+CRITICAL: If the robot state is "Stand", NEVER use stand_up as the first action. The robot is already standing!
 
-ROBOT SPECS:
-- Size: 0.7m wide × 1.4m long
-- Movement: Uses body frame for positioning
-- Coordinate system: x=forward, y=left, yaw=rotation (body frame)
+INPUTS
+- CURRENT_STATE: JSON with robot pose and mode in the vision frame.
+- WORLD_MODEL: JSON with named waypoints, semantic zones and per-location orientation or drop rules.
+- TASK: natural language command with destinations in order.
 
-AVAILABLE ACTIONS:
+ACTION PRIMITIVES
+Allowed actions, one per line, no quotes, no numbering:
 - stand_up
-- sit_down  
-- start_moving, x=float, y=float, yaw=float, frame="body"
-- get_image, image_source="camera_name"
+- sit_down
+- start_moving x=<float> y=<float> yaw=<float> frame=body
+- get_image image_source=<camera_name>
 - get_initial_pose
-- start_automated_grasp, object_type="exact_object_name_from_user" (arm will be stowed after grasping)
-- start_move_arm_pose, x=float, y=float, z=float, qw=float, qx=float, qy=float, qz=float, duration=float, open_gripper=bool
-- start_arm_command, command_type=open|close|stow|carry
+- start_automated_grasp object_type=<exact_object_name_from_user>
+- start_move_arm_pose x=<float> y=<float> z=<float> qw=<float> qx=<float> qy=<float> qz=<float> duration=<float> open_gripper=<true|false>
+- start_arm_command command_type=<open|close|stow|carry>
 
-RULES:
-1. Visit destinations in EXACT order specified by user
-2. One action per line, no quotes/brackets, no numbering
-3. Robot must be in standing mode before moving and grasping
-4. Only use "stand_up" if robot is not already standing, moving or grasping
-5. In one move, the robot can either move in the x direction, the y direction, or the yaw direction, not two or three at once.
-6. Use RELATIVE body frame coordinates for movements - each movement is relative to current position
-7. For movements, calculate: move_x = target_x - current_x, move_y = target_y - current_y
-8. For pick-up: walk to pick-up location and face forward (yaw=0)
-9. For drop-off: walk to drop-off location and face left (yaw=1.57 radians)
-10. Use EXACT object name from user command for object_type (e.g., "tomato can" not "tomato")
-11. For drop-off procedure: start_move_arm_pose to (0.8, 0.0, 0.3) with quaternion (0.7071, 0.7071, 0.0, 0.0) for gripper pointing down (this is the arm pose for dropping off objects) in 1 second, then start_arm_command open, then start_arm_command close, then start_arm_command stow
+HARD RULES
+1. Execute destinations in the exact order given by the user.
+2. Output only the action list. One action per line. No comments.
+3. CRITICAL: If robot state is "Stand", NEVER use stand_up. Only use stand_up if robot state is "Sit" or "Powered off".
+4. Use relative body-frame moves. Each start_moving is relative to the current robot body frame.
+5. One degree of freedom per move line. Either x or y or yaw is non-zero.
+6. NEVER start with stand_up if robot is already standing.
+6. For navigation to a target T in vision frame:
+   6.1 First resolve T to numeric coordinates and a yaw_hint using WORLD_MODEL and synonyms.
+   6.2 If a yaw is required at T, add a separate yaw-only rotation to that yaw.
+   6.3 Move along body x and body y in separate steps to reach T. Keep each step axis-aligned.
+7. For pick-up targets, finish aligned to the pick yaw defined for that target. Default yaw 0.0 if unspecified.
+8. For drop-off targets, finish aligned to the drop yaw defined for that target. Default yaw 1.57 if unspecified.
+9. Use the exact user object name in start_automated_grasp object_type.
+10. Standard drop-off procedure after arriving and setting drop yaw:
+    - start_move_arm_pose x=0.8 y=0.0 z=0.3 qw=0.7071 qx=0.7071 qy=0.0 qz=0.0 duration=1.0 open_gripper=false
+    - start_arm_command command_type=open
+    - start_arm_command command_type=close
+    - start_arm_command command_type=stow
+11. Keep a safe final approach. Stop body motion with at least 0.30 m clearance before grasping when possible.
+12. If a referenced location or object cannot be resolved, output a single line: FAIL unresolved=<what>
 
-PLANNING PROCESS:
-1. Parse user command to identify destinations in order
-2. Calculate relative body frame movements from current position to each destination
-3. Plan path visiting each destination once in order
-4. Ensure correct robot orientation at each destination (yaw=0 for pick-up, yaw=1.57 radians for drop-off)
-5. For drop-off locations: add drop-off procedure (start_move_arm_pose, start_arm_command open, start_arm_command close, start_arm_command stow)
-6. Generate action sequence with relative body frame movements
+PLANNING STEPS
+A. Parse TASK into an ordered list of subgoals with types: pick, place, visit, look.
+B. Resolve each natural language location via WORLD_MODEL.names and WORLD_MODEL.synonyms. Use canonical names.
+C. For each subgoal:
+   C1. CRITICAL: If robot state is "Stand", NEVER use stand_up. Only use stand_up if robot state is "Sit" or "Powered off".
+   C2. For PICK tasks: 
+       - ALWAYS navigate to the pickup location FIRST using start_moving
+       - Use WORLD_MODEL to find pickup location coordinates
+       - Then use start_automated_grasp with the exact object name
+       - NEVER grasp without first navigating to the pickup location
+   C3. For navigation: Rotate in yaw-only steps first if orientation helps axis-aligned approach.
+   C4. Plan axis-aligned moves in body frame toward the target. Use relative steps.
+   C5. On arrival, set required yaw using a yaw-only step.
+   C6. If pick: call start_automated_grasp with exact object_type.
+   C7. If drop: run the standard drop-off procedure.
+D. Do not repeat locations already satisfied unless the order requires a revisit.
 
-OUTPUT FORMAT:
-Return only the action list, one action per line.
+OUTPUT FORMAT
+Only the actions. One per line.
 
-Task: {command}
+CRITICAL RULES:
+- If robot state is "Stand", NEVER use stand_up
+- Always navigate to pickup location FIRST, then grasp
+- Start with navigation, not stand_up
 
-Actions:"""
+VARIABLES TO FILL
+
+CURRENT_STATE = {current_state_json}
+
+WORLD_MODEL = {world_model_json}
+
+TASK = {command}"""
 
 class NaturalLanguageControl:
-    def __init__(self, use_speech=False):
+    def __init__(self, use_speech=False, world_id=None):
         rospy.init_node('nl_control', anonymous=True)
         self.use_speech = use_speech
         
         # Position tracking - will get actual position from robot
         self.current_position = [0.0, 0.0, 0.0]  # [x, y, yaw] relative to start position
         self.start_position = None  # Will be set on first position read
+        
+        # Initialize world manager
+        self.world_manager = WorldManager()
+        
+        # Initialize LLM as None first to prevent AttributeError
+        self.llm = None
+        
+        # World model configuration - can be loaded from file or set programmatically
+        rospy.loginfo("Loading world model...")
+        try:
+            if world_id:
+                self.world_model = self.world_manager.get_world_config(world_id)
+                if self.world_model:
+                    world_name, world_desc = self.world_manager.get_world_info(world_id)
+                    rospy.loginfo(f"Loaded world: {world_name} - {world_desc}")
+                else:
+                    rospy.logwarn(f"Invalid world ID: {world_id}, using default")
+                    self.world_model = self.load_world_model()
+            else:
+                self.world_model = self.load_world_model()
+            rospy.loginfo("World model loaded successfully")
+        except Exception as e:
+            rospy.logerr(f"Error loading world model: {e}")
+            self.world_model = self.load_world_model()
         
         # Publisher for position updates
         self.pub_position = rospy.Publisher('/nl_control/robot_position', String, queue_size=1)
@@ -130,23 +179,76 @@ class NaturalLanguageControl:
         else:
             rospy.loginfo("Robot already powered, skipping power_on command")
         
-        # Stand up robot to get it ready for commands
-        try:
-            rospy.loginfo("Sending stand_up command to FSM...")
-            recorder.publish_event('start_stand_up')
-            self.spot_fsm.send("stand_up")
-            recorder.publish_event('stop_stand_up')
-            rospy.loginfo("Stand_up command completed successfully")
-            
-            rospy.loginfo(f"Current FSM state after stand_up: {self.spot_fsm.current_state}")
-        except Exception as e:
-            rospy.logerr(f"Stand_up command failed: {e}")
-            raise
+        # Stand up robot to get it ready for commands (only if not already standing)
+        current_state = str(self.spot_fsm.current_state)
+        if current_state not in ["Stand", "Moving", "Grasping"]:
+            try:
+                rospy.loginfo("Sending stand_up command to FSM...")
+                recorder.publish_event('start_stand_up')
+                self.spot_fsm.send("stand_up")
+                recorder.publish_event('stop_stand_up')
+                rospy.loginfo("Stand_up command completed successfully")
+                
+                rospy.loginfo(f"Current FSM state after stand_up: {self.spot_fsm.current_state}")
+            except Exception as e:
+                rospy.logerr(f"Stand_up command failed: {e}")
+                raise
+        else:
+            rospy.loginfo(f"Robot already in {current_state} state, skipping stand_up command")
         
         rospy.loginfo("Robot ready for commands")
         
         # Publisher for simulation feedback
         self.pub_feedback = rospy.Publisher('/spot/execution_feedback', String, queue_size=20)
+        
+        if use_speech:
+            self.speech_sub = rospy.Subscriber('/hl/user_speech', String, self.speech_callback)
+            self.speech_input = None
+            self.speech_event = threading.Event()
+            rospy.loginfo("Speech mode: listening on /hl/user_speech")
+        else:
+            rospy.loginfo("Terminal mode: type commands")
+        
+        rospy.loginfo("About to setup LLM...")
+        try:
+            self.setup_llm()
+            rospy.loginfo("Ready")
+        except Exception as e:
+            rospy.logwarn(f"LLM setup failed: {e}, continuing without LLM")
+            self.llm = None
+            rospy.loginfo("Ready (LLM disabled)")
+    
+    def load_world_model(self):
+        """Load world model configuration. Can be extended to load from file."""
+        # Default world model - can be overridden or loaded from file
+        return {
+            "waypoints": {
+                "PickA": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                "DropA": {"x": 2.0, "y": 0.5, "z": 0.0, "pick_yaw": None, "drop_yaw": 1.57}
+            },
+            "zones": {},
+            "synonyms": {
+                "pick-up location": "PickA",
+                "drop-off location": "DropA",
+                "pick up location": "PickA",
+                "drop off location": "DropA"
+            }
+        }
+    
+    def update_world_model(self, new_world_model):
+        """Update the world model configuration."""
+        self.world_model = new_world_model
+        rospy.loginfo("World model updated")
+    
+    def load_world_model_from_file(self, filepath):
+        """Load world model from JSON file."""
+        try:
+            with open(filepath, 'r') as f:
+                self.world_model = json.load(f)
+            rospy.loginfo(f"World model loaded from {filepath}")
+        except Exception as e:
+            rospy.logerr(f"Failed to load world model from {filepath}: {e}")
+    
         
         if use_speech:
             self.speech_sub = rospy.Subscriber('/hl/user_speech', String, self.speech_callback)
@@ -241,10 +343,12 @@ class NaturalLanguageControl:
                 return
             
             rospy.loginfo("Setting up Gemini LLM...")
+            rospy.loginfo(f"API key found: {api_key[:10]}...")
             self.llm = genai.Client(api_key=api_key)
             rospy.loginfo("LLM ready")
         except Exception as e:
-            rospy.logwarn(f"Failed to setup Gemini client: {e}")
+            rospy.logerr(f"Failed to setup Gemini client: {e}")
+            rospy.logerr(f"LLM will be disabled. Error details: {str(e)}")
             self.llm = None
             raise
     
@@ -259,6 +363,8 @@ class NaturalLanguageControl:
     def parse_command(self, command):
         """Parse natural language command using LLM."""
         if not self.llm:
+            rospy.logwarn("LLM is not available. Cannot parse natural language commands.")
+            rospy.logwarn("Please check your GOOGLE_API_KEY environment variable.")
             return None
         
         # Publish LLM processing start
@@ -272,14 +378,29 @@ class NaturalLanguageControl:
             if not self.get_actual_robot_position():
                 rospy.logwarn("Using last known position")
             
-            # Format prompt with current state, position, and command
+            # Create current state JSON
+            current_state_json = {
+                "robot_state": current_state,
+                "standing": current_state in ["Stand", "Moving", "Grasping"],
+                "pose_vision": {
+                    "x": self.current_position[0],
+                    "y": self.current_position[1], 
+                    "yaw": self.current_position[2]
+                },
+                "arm": "stowed",  # Default - could be enhanced to track actual arm state
+                "held_object": None  # Default - could be enhanced to track held objects
+            }
+            
+            # Format prompt with current state, world model, and command
             rospy.loginfo(f"[LLM DEBUG] Sending position to LLM: ({self.current_position[0]:.2f}, {self.current_position[1]:.2f}, {self.current_position[2]:.2f})")
+            rospy.loginfo(f"[LLM DEBUG] Robot state: {current_state}")
+            rospy.loginfo(f"[LLM DEBUG] Current state JSON: {json.dumps(current_state_json, indent=2)}")
             
             # Publish initial position to GUI
             self.publish_position_update()
             formatted_prompt = PROMPT.format(
-                current_state=current_state,
-                current_position=f"({self.current_position[0]:.2f}, {self.current_position[1]:.2f}, {self.current_position[2]:.2f})",
+                current_state_json=json.dumps(current_state_json, indent=2),
+                world_model_json=json.dumps(self.world_model, indent=2),
                 command=command
             )
             
@@ -427,7 +548,8 @@ class NaturalLanguageControl:
         # Process with LLM immediately after receiving command
         actions = self.parse_command(command)
         if not actions:
-            print("Parse failed - try a different command")
+            print("Parse failed - LLM is not available or command could not be understood")
+            print("Please check your GOOGLE_API_KEY environment variable and try again")
             return
         
         print(f"\nLLM Generated Plan:")
@@ -502,7 +624,47 @@ def main():
     USE_SPEECH = False
     
     try:
-        controller = NaturalLanguageControl(use_speech=USE_SPEECH)
+        # Create world manager for selection without full controller
+        wm = WorldManager()
+        
+        # Show world selection
+        print("\n" + "="*60)
+        print("SPOT ROBOT - WORLD SELECTION")
+        print("="*60)
+        print("Available Worlds:")
+        print()
+        
+        world_list = wm.get_world_list()
+        for world_id, name, description in world_list:
+            print(f"{world_id}. {name}")
+            print(f"   {description}")
+            print()
+        
+        while True:
+            try:
+                choice = input("Select a world (1-10) or 'q' to quit: ").strip()
+                if choice.lower() == 'q':
+                    print("No world selected. Exiting...")
+                    return
+                
+                if choice in wm.worlds:
+                    world_name, world_desc = wm.get_world_info(choice)
+                    print(f"\nSelected: {world_name}")
+                    print(f"Description: {world_desc}")
+                    confirm = input("Continue with this world? (y/n): ").strip().lower()
+                    if confirm in ['y', 'yes']:
+                        selected_world = choice
+                        break
+                    else:
+                        continue
+                else:
+                    print("Invalid selection. Please choose 1-10 or 'q' to quit.")
+            except (EOFError, KeyboardInterrupt):
+                print("\nExiting...")
+                return
+        
+        # Create the controller with selected world
+        controller = NaturalLanguageControl(use_speech=USE_SPEECH, world_id=selected_world)
         controller.run()
     except KeyboardInterrupt:
         rospy.loginfo("Shutdown")

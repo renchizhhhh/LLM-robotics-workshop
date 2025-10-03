@@ -105,29 +105,38 @@ class SpotGraspActionServer:
                 self.interactive_grasp_server.set_aborted(result)
                 return
             
-            # Store initial pose if requested
+            # Store current pose before grasping if requested
             initial_pose = None
             if goal.return_to_initial_pose:
-                if self.robot_manager.initial_pose is not None:
+                try:
                     from geometry_msgs.msg import PoseStamped
                     import tf.transformations
                     
-                    # Convert SE2 pose to PoseStamped
-                    initial_pose = PoseStamped()
-                    initial_pose.header.frame_id = "odom"
-                    initial_pose.header.stamp = rospy.Time.now()
-                    initial_pose.pose.position.x = self.robot_manager.initial_pose.x
-                    initial_pose.pose.position.y = self.robot_manager.initial_pose.y
-                    initial_pose.pose.position.z = 0.0
-                    
-                    # Convert angle to quaternion
-                    quat = tf.transformations.quaternion_from_euler(0, 0, self.robot_manager.initial_pose.angle)
-                    initial_pose.pose.orientation.x = quat[0]
-                    initial_pose.pose.orientation.y = quat[1]
-                    initial_pose.pose.orientation.z = quat[2]
-                    initial_pose.pose.orientation.w = quat[3]
-                else:
-                    rospy.logwarn("No initial pose available for return to initial pose")
+                    # Get current robot pose directly
+                    clients = self.robot_manager.get_clients()
+                    if clients and clients.get('robot_state'):
+                        from bosdyn.client.frame_helpers import get_a_tform_b, VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME
+                        
+                        robot_state = clients['robot_state'].get_robot_state()
+                        ts = robot_state.kinematic_state.transforms_snapshot
+                        vision_T_body = get_a_tform_b(ts, VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+                        
+                        # Convert current pose to PoseStamped
+                        initial_pose = PoseStamped()
+                        initial_pose.header.frame_id = "odom"
+                        initial_pose.header.stamp = rospy.Time.now()
+                        initial_pose.pose.position.x = vision_T_body.x
+                        initial_pose.pose.position.y = vision_T_body.y
+                        initial_pose.pose.position.z = vision_T_body.z
+                        initial_pose.pose.orientation.x = vision_T_body.rot.x
+                        initial_pose.pose.orientation.y = vision_T_body.rot.y
+                        initial_pose.pose.orientation.z = vision_T_body.rot.z
+                        initial_pose.pose.orientation.w = vision_T_body.rot.w
+                        rospy.loginfo("Stored current pose before grasping for return")
+                    else:
+                        rospy.logwarn("Could not get current robot pose for return to initial pose")
+                except Exception as e:
+                    rospy.logwarn(f"Failed to get current pose for return: {e}")
             
             # Get image directly from the robot
             feedback.current_state = "ACQUIRING_IMAGE"
@@ -397,12 +406,9 @@ class SpotGraspActionServer:
                 cmd_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
                 time.sleep(1.5)
             else:
-                # Just carry the object
+                # Keep object and move arm to carry position
                 carry_cmd = RobotCommandBuilder.arm_carry_command()
                 cmd_client.robot_command(carry_cmd, end_time_secs=time.time() + 3)
-                # Just stow the arm
-                # stow_cmd = RobotCommandBuilder.arm_stow_command()
-                # cmd_client.robot_command(stow_cmd, end_time_secs=time.time() + 3)
                 time.sleep(2.0)
             
         except Exception as e:
@@ -493,7 +499,11 @@ class SpotGraspActionServer:
             feedback.status_message = f"Detecting {goal.object_type} in image"
             self.detect_object_server.publish_feedback(feedback)
             
-            pixel_x, pixel_y = self._detect_object_center_direct(img, goal.object_type)
+            detection_result = self._detect_object_center_direct(img, goal.object_type)
+            if detection_result and len(detection_result) == 3:
+                pixel_x, pixel_y, bbox = detection_result
+            else:
+                pixel_x, pixel_y, bbox = None, None, None
             
             # Set results
             result.success = pixel_x is not None
@@ -570,8 +580,8 @@ class SpotGraspActionServer:
             cx = int((x1 + x2) / 2000 * width)
             cy = int((y1 + y2) / 2000 * height)
             
-            rospy.loginfo(f"Detected {object_type} at ({cx}, {cy})")
-            return cx, cy
+            rospy.loginfo(f"Detected {object_type} at ({cx}, {cy}) with bbox ({x1}, {y1}, {x2}, {y2})")
+            return cx, cy, (x1, y1, x2, y2)
                 
         except Exception as e:
             rospy.logerr(f"Object detection failed: {e}")
@@ -593,25 +603,35 @@ class SpotGraspActionServer:
                 self.automated_grasp_server.set_aborted(result)
                 return
             
-            # Get initial pose for return if requested
+            # Store current pose before grasping (always store for return)
             initial_pose = None
-            if goal.return_to_initial_pose:
-                if hasattr(self.robot_manager, 'initial_pose') and self.robot_manager.initial_pose:
-                    initial_pose = geometry_msgs.msg.PoseStamped()
-                    initial_pose.header.frame_id = "odom"
-                    initial_pose.header.stamp = rospy.Time.now()
-                    initial_pose.pose.position.x = self.robot_manager.initial_pose.x
-                    initial_pose.pose.position.y = self.robot_manager.initial_pose.y
-                    initial_pose.pose.position.z = 0.0
-                    
-                    # Convert angle to quaternion
-                    quat = tf.transformations.quaternion_from_euler(0, 0, self.robot_manager.initial_pose.angle)
-                    initial_pose.pose.orientation.x = quat[0]
-                    initial_pose.pose.orientation.y = quat[1]
-                    initial_pose.pose.orientation.z = quat[2]
-                    initial_pose.pose.orientation.w = quat[3]
-                else:
-                    rospy.logwarn("No initial pose available for return to initial pose")
+            if True:  # Always store initial pose
+                try:
+                    # Get current robot pose directly
+                    clients = self.robot_manager.get_clients()
+                    if clients and clients.get('robot_state'):
+                        from bosdyn.client.frame_helpers import get_a_tform_b, VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME
+                        
+                        robot_state = clients['robot_state'].get_robot_state()
+                        ts = robot_state.kinematic_state.transforms_snapshot
+                        vision_T_body = get_a_tform_b(ts, VISION_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+                        
+                        # Convert current pose to PoseStamped
+                        initial_pose = geometry_msgs.msg.PoseStamped()
+                        initial_pose.header.frame_id = "odom"
+                        initial_pose.header.stamp = rospy.Time.now()
+                        initial_pose.pose.position.x = vision_T_body.x
+                        initial_pose.pose.position.y = vision_T_body.y
+                        initial_pose.pose.position.z = vision_T_body.z
+                        initial_pose.pose.orientation.x = vision_T_body.rot.x
+                        initial_pose.pose.orientation.y = vision_T_body.rot.y
+                        initial_pose.pose.orientation.z = vision_T_body.rot.z
+                        initial_pose.pose.orientation.w = vision_T_body.rot.w
+                        rospy.loginfo("Stored current pose before automated grasping for return")
+                    else:
+                        rospy.logwarn("Could not get current robot pose for return to initial pose")
+                except Exception as e:
+                    rospy.logwarn(f"Failed to get current pose for return: {e}")
             
             # Get image from robot
             feedback.current_state = "ACQUIRING_IMAGE"
@@ -643,7 +663,11 @@ class SpotGraspActionServer:
             feedback.status_message = f"Detecting {goal.object_type} in image"
             self.automated_grasp_server.publish_feedback(feedback)
             
-            pixel_x, pixel_y = self._detect_object_center_direct(img, goal.object_type)
+            detection_result = self._detect_object_center_direct(img, goal.object_type)
+            if detection_result and len(detection_result) == 3:
+                pixel_x, pixel_y, bbox = detection_result
+            else:
+                pixel_x, pixel_y, bbox = None, None, None
             
             if pixel_x is None or pixel_y is None:
                 result.success = False
@@ -670,7 +694,9 @@ class SpotGraspActionServer:
                 cv2.putText(img_vis, f"Grasp {goal.object_type} at ({pixel_x}, {pixel_y})", 
                            (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
-                filename = f"/catkin_ws/debug/grasp_{goal.object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
+                # Replace spaces with underscores in filename
+                safe_object_type = goal.object_type.replace(' ', '_')
+                filename = f"/catkin_ws/debug/grasp_{safe_object_type}_{rospy.Time.now().to_sec():.0f}.jpg"
                 cv2.imwrite(filename, img_vis)
                 rospy.loginfo(f"Detection image saved: {filename}")
             except Exception as e:
@@ -733,8 +759,8 @@ class SpotGraspActionServer:
                 pixel_x, pixel_y, image, goal, feedback, action_server=self.automated_grasp_server
             )
             
-            # Return to initial pose if requested and successful
-            if success and goal.return_to_initial_pose and initial_pose:
+            # Return to initial pose if successful and initial pose was stored
+            if success and initial_pose:
                 feedback.current_state = "RETURNING_TO_INITIAL_POSE"
                 feedback.progress = 0.9
                 feedback.status_message = "Returning to initial position"

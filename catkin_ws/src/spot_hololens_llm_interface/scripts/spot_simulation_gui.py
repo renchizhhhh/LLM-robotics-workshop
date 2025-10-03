@@ -12,8 +12,11 @@ import math
 import json
 import threading
 import time
-from std_msgs.msg import String
+from std_msgs.msg import String, Empty
 from geometry_msgs.msg import PoseStamped
+
+# Import world manager for dynamic world loading
+from world_manager import WorldManager
 
 # Check for display availability before importing tkinter
 try:
@@ -25,8 +28,22 @@ except Exception as e:
     GUI_AVAILABLE = False
 
 class SpotSimulationGUI:
-    def __init__(self):
+    def __init__(self, world_id=None):
         rospy.init_node('spot_simulation_gui', anonymous=True)
+        
+        # Initialize world manager
+        self.world_manager = WorldManager()
+        
+        # Load world configuration
+        if world_id and world_id in self.world_manager.worlds:
+            self.world_config = self.world_manager.get_world_config(world_id)
+            self.world_name, self.world_description = self.world_manager.get_world_info(world_id)
+            rospy.loginfo(f"GUI loaded world: {self.world_name} - {self.world_description}")
+        else:
+            # Default to simple world if no world_id provided
+            self.world_config = self.world_manager.get_world_config("1")
+            self.world_name, self.world_description = self.world_manager.get_world_info("1")
+            rospy.loginfo(f"GUI using default world: {self.world_name}")
         
         # Check if GUI is available
         if not GUI_AVAILABLE:
@@ -38,9 +55,9 @@ class SpotSimulationGUI:
             self.headless_mode = False
         
         # Robot state
-        self.robot_x = 0.0  # Body frame position
+        self.robot_x = 0.0  # World frame position (same as NL_Control)
         self.robot_y = 0.0
-        self.robot_yaw = -math.pi/2  # Radians - robot starts facing left (Y direction) so length is parallel to X
+        self.robot_yaw = 0.0  # Radians - robot starts facing forward (X direction)
         self.robot_state = "unknown"
         self.current_action = "idle"
         self.has_object = False
@@ -48,16 +65,12 @@ class SpotSimulationGUI:
         self.arm_status = "stowed"
         self.gripper_status = "closed"
         
-        # World objects (in vision frame coordinates) - positioned diagonally around pickup location
-        self.objects = {
-            "tomato_can": {"x": 3.0, "y": -1.0, "present": True, "color": "#f85149"},
-            "apple": {"x": 2.8, "y": -0.8, "present": True, "color": "#39d353"},
-            "bottle": {"x": 3.2, "y": -1.2, "present": True, "color": "#58a6ff"}
-        }
+        # Dynamic world objects based on configuration
+        self.objects = self._create_dynamic_objects()
         
-        # World landmarks (in vision frame) - updated positions
-        self.pickup_location = {"x": 3.0, "y": -1.0}  # Pickup at (3, -1)
-        self.dropoff_location = {"x": 2.0, "y": 1.5}  # Dropoff at (2, 1.5)
+        # Dynamic world landmarks based on configuration
+        self.waypoints = self.world_config.get("waypoints", {})
+        self.zones = self.world_config.get("zones", {})
         
         # Position tracking - convert vision frame to display coordinates
         self.vision_to_body_offset_x = 0.0
@@ -67,7 +80,7 @@ class SpotSimulationGUI:
         # GUI setup
         try:
             self.root = tk.Tk()
-            self.root.title("Spot Robot Simulation - Bird's Eye View")
+            self.root.title(f"Spot Robot Simulation - {self.world_name}")
         except Exception as e:
             rospy.logerr(f"Failed to create GUI window: {e}")
             self.headless_mode = True
@@ -120,6 +133,92 @@ class SpotSimulationGUI:
                                  bg='#1a1a1a', fg='#ffa657')
         self.arm_label.grid(row=1, column=1, sticky=tk.W, padx=15, pady=5)
         
+        # World info label
+        self.world_label = tk.Label(self.info_frame, text=f"World: {self.world_name}", font=("Arial", 12, "bold"), 
+                                   bg='#1a1a1a', fg='#39d353')
+        self.world_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=15, pady=5)
+        
+        # World selection button
+        self.world_button = tk.Button(self.info_frame, text="Change World", font=("Arial", 10, "bold"),
+                                     bg='#2d2d2d', fg='#f0f6fc', relief='flat', bd=1,
+                                     command=self.show_world_selection)
+        self.world_button.grid(row=2, column=2, sticky=tk.E, padx=15, pady=5)
+        
+        # Natural language feedback section (middle panel)
+        self.feedback_frame = tk.Frame(self.root, bg='#2d2d2d', relief='flat', bd=0)
+        self.feedback_frame.place(relx=0.33, rely=0.82, relwidth=0.33, relheight=0.12)
+        
+        # Create scrollable text widget for NL feedback
+        self.feedback_text = tk.Text(self.feedback_frame, 
+                                   font=("SF Pro Text", 11), bg='#2d2d2d', fg='#f0f6fc',
+                                   wrap=tk.WORD, height=4, width=40,
+                                   insertbackground='#f0f6fc', selectbackground='#404040',
+                                   relief='flat', bd=0, padx=8, pady=8)
+        
+        # Add scrollbar
+        scrollbar = tk.Scrollbar(self.feedback_frame, orient=tk.VERTICAL, command=self.feedback_text.yview)
+        self.feedback_text.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack text widget and scrollbar
+        self.feedback_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Insert initial text
+        initial_text = """Ready for commands"""
+        self.feedback_text.insert(tk.END, initial_text)
+        self.feedback_text.config(state=tk.DISABLED)  # Make read-only
+        
+        # Bind mouse wheel scrolling
+        self.feedback_text.bind("<MouseWheel>", self._on_mousewheel)
+        
+        # Robot control section (right panel)
+        self.ui_frame = tk.Frame(self.root, bg='#2d2d2d', relief='flat', bd=0)
+        self.ui_frame.place(relx=0.66, rely=0.82, relwidth=0.33, relheight=0.12)
+        
+        # Title
+        title_label = tk.Label(self.ui_frame, text="Robot Control", 
+                             font=("SF Pro Display", 12, "bold"), bg='#2d2d2d', fg='#f0f6fc')
+        title_label.pack(pady=(8, 0))
+        
+        # Text input
+        self.command_entry = tk.Entry(self.ui_frame, font=("SF Pro Text", 11), 
+                                    bg='#3a3a3a', fg='#f0f6fc', insertbackground='#f0f6fc',
+                                    relief='flat', bd=8, highlightthickness=0)
+        self.command_entry.pack(fill=tk.X, padx=12, pady=6)
+        self.command_entry.bind('<Return>', self._on_send_command)
+        
+        # Button frame
+        button_frame = tk.Frame(self.ui_frame, bg='#2d2d2d')
+        button_frame.pack(fill=tk.X, padx=12, pady=(0, 8))
+        
+        # Buttons with Apple-like styling
+        self.refresh_button = tk.Button(button_frame, text="Clear", command=self._on_refresh,
+                                      bg='#3a3a3a', fg='#f0f6fc', font=("SF Pro Text", 10, "bold"),
+                                      activebackground='#4a4a4a', activeforeground='#f0f6fc',
+                                      relief='flat', bd=0, padx=12, pady=6, highlightthickness=0)
+        self.refresh_button.pack(side=tk.LEFT, padx=3)
+        
+        self.send_button = tk.Button(button_frame, text="Send", command=self._on_send_command,
+                                   bg='#007AFF', fg='white', font=("SF Pro Text", 10, "bold"),
+                                   activebackground='#0056CC', activeforeground='white',
+                                   relief='flat', bd=0, padx=12, pady=6, highlightthickness=0)
+        self.send_button.pack(side=tk.LEFT, padx=3)
+        
+        self.approve_button = tk.Button(button_frame, text="Approve", command=self._on_approve,
+                                      bg='#34C759', fg='white', font=("SF Pro Text", 10, "bold"),
+                                      activebackground='#28A745', activeforeground='white',
+                                      relief='flat', bd=0, padx=12, pady=6, highlightthickness=0)
+        self.approve_button.pack(side=tk.LEFT, padx=3)
+        
+        self.decline_button = tk.Button(button_frame, text="Dismiss", command=self._on_decline,
+                                      bg='#FF3B30', fg='white', font=("SF Pro Text", 10, "bold"),
+                                      activebackground='#D70015', activeforeground='white',
+                                      relief='flat', bd=0, padx=12, pady=6, highlightthickness=0)
+        self.decline_button.pack(side=tk.LEFT, padx=3)
+        
+        # Initially disable approve/decline buttons
+        self.approve_button.config(state='disabled')
+        self.decline_button.config(state='disabled')
         
         # Control buttons with dark theme
         button_frame = tk.Frame(self.root, bg='#1a1a1a')
@@ -131,9 +230,22 @@ class SpotSimulationGUI:
                                      relief='flat', padx=20, pady=10)
         self.reset_button.pack(side=tk.LEFT, padx=10)
         
+        self.stop_button = tk.Button(button_frame, text="Stop", command=self._on_stop,
+                                    bg='#f85149', fg='#f0f6fc', font=("Arial", 12, "bold"),
+                                    activebackground='#ff7b72', activeforeground='#f0f6fc',
+                                    relief='flat', padx=20, pady=10)
+        self.stop_button.pack(side=tk.LEFT, padx=10)
+        
         # ROS subscribers
         self.sub_robot_state = rospy.Subscriber('/spot_entrance/robot_state', String, self.on_robot_state)
         self.sub_feedback = rospy.Subscriber('/spot/execution_feedback', String, self.on_execution_feedback)
+        self.sub_nl_position = rospy.Subscriber('/nl_control/robot_position', String, self.on_nl_position_update)
+        self.sub_interpretation = rospy.Subscriber('/llm_int/interpretation', String, self._on_interpretation)
+        
+        # ROS publishers for GUI interface
+        self.pub_user_speech = rospy.Publisher('/hl/user_speech', String, queue_size=1)
+        self.pub_approval = rospy.Publisher('/hl/approval', String, queue_size=1)
+        self.pub_stop = rospy.Publisher('/hl/stop', Empty, queue_size=1)
         
         # Threading for GUI updates
         self.update_lock = threading.Lock()
@@ -146,7 +258,7 @@ class SpotSimulationGUI:
         self.root.after(100, self.periodic_update)
         
     def vision_to_canvas(self, x, y):
-        """Convert vision frame coordinates to canvas coordinates with 90° rotation"""
+        """Convert vision frame coordinates to canvas coordinates with natural mapping"""
         # Canvas center (dynamic based on screen size)
         canvas_center_x = self.canvas.winfo_width() // 2 if self.canvas.winfo_width() > 1 else 600
         canvas_center_y = self.canvas.winfo_height() // 2 if self.canvas.winfo_height() > 1 else 400
@@ -154,13 +266,12 @@ class SpotSimulationGUI:
         # Scale: 1 meter = 80 pixels (larger for better visibility)
         scale = 80
         
-        # Rotate 90 degrees counterclockwise: (x,y) -> (-y,x)
-        # Vision frame rotated: x=forward becomes upward, y=left becomes backward
-        rotated_x = -y
-        rotated_y = x
-        
-        canvas_x = canvas_center_x + rotated_x * scale
-        canvas_y = canvas_center_y - rotated_y * scale  # Invert Y for screen coordinates
+        # Natural mapping for intuitive display:
+        # X (forward) -> Y (upward on screen)
+        # Y (left) -> X (leftward on screen)
+        # This makes the simulation feel natural for participants
+        canvas_x = canvas_center_x - y * scale  # Y (left) -> X (leftward), Y (right) -> X (rightward)
+        canvas_y = canvas_center_y - x * scale  # X (forward) -> Y (upward), invert for screen coords
         
         return canvas_x, canvas_y
     
@@ -213,17 +324,64 @@ class SpotSimulationGUI:
             if 0 <= y <= canvas_height:
                 self.canvas.create_line(0, y, canvas_width, y, fill="#21262d", width=1)
         
-        # Draw pickup location with futuristic styling
-        pickup_x, pickup_y = self.vision_to_canvas(self.pickup_location["x"], self.pickup_location["y"])
-        self.canvas.create_rectangle(pickup_x-25, pickup_y-25, pickup_x+25, pickup_y+25, 
-                                   fill="#ffa657", outline="#ff7b72", width=3)
-        self.canvas.create_text(pickup_x, pickup_y-40, text="PICKUP", font=("Arial", 14, "bold"), fill="#ffa657")
+        # Draw waypoints dynamically
+        for waypoint_name, waypoint_data in self.waypoints.items():
+            x, y = waypoint_data["x"], waypoint_data["y"]
+            canvas_x, canvas_y = self.vision_to_canvas(x, y)
+            
+            # Determine waypoint type and styling
+            if waypoint_data.get("pick_yaw") is not None and waypoint_data.get("drop_yaw") is not None:
+                # Both pickup and dropoff
+                color = "#ffa657"
+                outline = "#ff7b72"
+                label = "PICK/DROP"
+            elif waypoint_data.get("pick_yaw") is not None:
+                # Pickup only
+                color = "#ffa657"
+                outline = "#ff7b72"
+                label = "PICKUP"
+            elif waypoint_data.get("drop_yaw") is not None:
+                # Dropoff only
+                color = "#00d4aa"
+                outline = "#39d353"
+                label = "DROPOFF"
+            else:
+                # General waypoint
+                color = "#58a6ff"
+                outline = "#39d353"
+                label = waypoint_name.upper()
+            
+            # Draw waypoint rectangle
+            self.canvas.create_rectangle(canvas_x-25, canvas_y-25, canvas_x+25, canvas_y+25, 
+                                       fill=color, outline=outline, width=3)
+            self.canvas.create_text(canvas_x, canvas_y-40, text=label, font=("Arial", 12, "bold"), fill=color)
+            
+            # Draw orientation indicator if specified
+            if waypoint_data.get("pick_yaw") is not None:
+                yaw = waypoint_data["pick_yaw"]
+                arrow_length = 20
+                arrow_x = canvas_x + arrow_length * math.cos(yaw)
+                arrow_y = canvas_y - arrow_length * math.sin(yaw)
+                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#ffffff", width=2, arrow=tk.LAST)
         
-        # Draw dropoff location with futuristic styling
-        dropoff_x, dropoff_y = self.vision_to_canvas(self.dropoff_location["x"], self.dropoff_location["y"])
-        self.canvas.create_rectangle(dropoff_x-25, dropoff_y-25, dropoff_x+25, dropoff_y+25,
-                                   fill="#00d4aa", outline="#39d353", width=3)
-        self.canvas.create_text(dropoff_x, dropoff_y-40, text="DROPOFF", font=("Arial", 14, "bold"), fill="#00d4aa")
+        # Draw zones dynamically
+        for zone_name, zone_data in self.zones.items():
+            centroid = zone_data["centroid"]
+            x, y = centroid["x"], centroid["y"]
+            canvas_x, canvas_y = self.vision_to_canvas(x, y)
+            
+            # Draw zone as a larger circle
+            self.canvas.create_oval(canvas_x-40, canvas_y-40, canvas_x+40, canvas_y+40,
+                                   fill="#2d2d2d", outline="#58a6ff", width=2, stipple="gray25")
+            self.canvas.create_text(canvas_x, canvas_y, text=zone_name.upper(), font=("Arial", 10, "bold"), fill="#58a6ff")
+            
+            # Draw orientation hint if available
+            if zone_data.get("yaw_hint") is not None:
+                yaw = zone_data["yaw_hint"]
+                arrow_length = 30
+                arrow_x = canvas_x + arrow_length * math.cos(yaw)
+                arrow_y = canvas_y - arrow_length * math.sin(yaw)
+                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#58a6ff", width=3, arrow=tk.LAST)
         
         # Draw objects with better visibility
         for obj_name, obj_data in self.objects.items():
@@ -244,8 +402,9 @@ class SpotSimulationGUI:
         
         # Calculate robot corner points based on orientation
         # Robot's length should be parallel to X-axis (forward direction) when yaw=0
-        # Positive yaw is counterclockwise (left)
-        display_yaw = self.robot_yaw
+        # Subtract 90 degree offset so robot faces up (X forward) at start
+        # Positive yaw is counterclockwise (left) - invert for correct display
+        display_yaw = -self.robot_yaw - math.pi/2
         cos_yaw = math.cos(display_yaw)
         sin_yaw = math.sin(display_yaw)
         
@@ -347,12 +506,160 @@ class SpotSimulationGUI:
             self.canvas.create_oval(gripper_x - 3, gripper_y - 3, gripper_x + 3, gripper_y + 3,
                                   fill="#f85149", outline="#f0f6fc", width=1, tags="robot")
     
+    def _create_dynamic_objects(self):
+        """Create dynamic objects based on world configuration."""
+        objects = {}
+        
+        # Create objects near waypoints that have pick_yaw (pickup locations)
+        waypoints = self.world_config.get("waypoints", {})
+        colors = ["#f85149", "#39d353", "#58a6ff", "#ffa657", "#ff7b72", "#00d4aa"]
+        # Only drink objects for pickup locations
+        object_names = ["water_bottle", "soda_can", "juice_box", "coffee_cup", "energy_drink", "sports_drink"]
+        
+        color_idx = 0
+        name_idx = 0
+        
+        for waypoint_name, waypoint_data in waypoints.items():
+            if waypoint_data.get("pick_yaw") is not None:
+                # This is a pickup location, add objects nearby
+                x = waypoint_data["x"]
+                y = waypoint_data["y"]
+                
+                # Add 2-3 objects near this pickup location
+                for i in range(2):
+                    offset_x = (i - 0.5) * 0.4  # Spread objects around the waypoint
+                    offset_y = (i % 2) * 0.3
+                    
+                    obj_name = object_names[name_idx % len(object_names)]
+                    obj_color = colors[color_idx % len(colors)]
+                    
+                    objects[obj_name] = {
+                        "x": x + offset_x,
+                        "y": y + offset_y,
+                        "present": True,
+                        "color": obj_color,
+                        "waypoint": waypoint_name
+                    }
+                    
+                    color_idx += 1
+                    name_idx += 1
+        
+        # If no pickup waypoints found, create default drink objects
+        if not objects:
+            objects = {
+                "water_bottle": {"x": 2.0, "y": -1.0, "present": True, "color": "#f85149", "waypoint": "default"},
+                "soda_can": {"x": 2.2, "y": -0.8, "present": True, "color": "#39d353", "waypoint": "default"},
+                "juice_box": {"x": 1.8, "y": -1.2, "present": True, "color": "#58a6ff", "waypoint": "default"}
+            }
+        
+        return objects
+    
+    def show_world_selection(self):
+        """Show world selection dialog."""
+        # Create world selection window
+        world_window = tk.Toplevel(self.root)
+        world_window.title("Select World")
+        world_window.configure(bg='#1a1a1a')
+        world_window.geometry("600x500")
+        world_window.transient(self.root)
+        world_window.grab_set()
+        
+        # Center the window
+        world_window.geometry("+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50))
+        
+        # Title
+        title_label = tk.Label(world_window, text="Select World Configuration", 
+                               font=("Arial", 16, "bold"), bg='#1a1a1a', fg='#f0f6fc')
+        title_label.pack(pady=20)
+        
+        # Create scrollable frame for world list
+        canvas = tk.Canvas(world_window, bg='#1a1a1a', highlightthickness=0)
+        scrollbar = tk.Scrollbar(world_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg='#1a1a1a')
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Add world options
+        world_list = self.world_manager.get_world_list()
+        selected_world = tk.StringVar()
+        
+        for world_id, name, description in world_list:
+            frame = tk.Frame(scrollable_frame, bg='#2d2d2d', relief='flat', bd=1)
+            frame.pack(fill=tk.X, padx=10, pady=5)
+            
+            radio = tk.Radiobutton(frame, text=f"{world_id}. {name}", 
+                                  variable=selected_world, value=world_id,
+                                  font=("Arial", 12, "bold"), bg='#2d2d2d', fg='#f0f6fc',
+                                  selectcolor='#1a1a1a', activebackground='#2d2d2d')
+            radio.pack(anchor=tk.W, padx=10, pady=5)
+            
+            desc_label = tk.Label(frame, text=description, font=("Arial", 10), 
+                                 bg='#2d2d2d', fg='#8b949e', wraplength=500)
+            desc_label.pack(anchor=tk.W, padx=30, pady=(0, 10))
+        
+        # Pack canvas and scrollbar
+        canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Buttons
+        button_frame = tk.Frame(world_window, bg='#1a1a1a')
+        button_frame.pack(fill=tk.X, padx=20, pady=20)
+        
+        def on_select():
+            world_id = selected_world.get()
+            if world_id:
+                self.load_world(world_id)
+                world_window.destroy()
+        
+        def on_cancel():
+            world_window.destroy()
+        
+        select_btn = tk.Button(button_frame, text="Select World", command=on_select,
+                              font=("Arial", 12, "bold"), bg='#00d4aa', fg='#000000',
+                              relief='flat', bd=0, padx=20, pady=10)
+        select_btn.pack(side=tk.LEFT, padx=10)
+        
+        cancel_btn = tk.Button(button_frame, text="Cancel", command=on_cancel,
+                              font=("Arial", 12, "bold"), bg='#f85149', fg='#ffffff',
+                              relief='flat', bd=0, padx=20, pady=10)
+        cancel_btn.pack(side=tk.LEFT, padx=10)
+    
+    def load_world(self, world_id):
+        """Load a new world configuration."""
+        if world_id in self.world_manager.worlds:
+            # Update world configuration
+            self.world_config = self.world_manager.get_world_config(world_id)
+            self.world_name, self.world_description = self.world_manager.get_world_info(world_id)
+            
+            # Update waypoints and zones
+            self.waypoints = self.world_config.get("waypoints", {})
+            self.zones = self.world_config.get("zones", {})
+            
+            # Update objects
+            self.objects = self._create_dynamic_objects()
+            
+            # Update GUI elements
+            self.root.title(f"Spot Robot Simulation - {self.world_name}")
+            self.world_label.config(text=f"World: {self.world_name}")
+            
+            # Redraw the world
+            self.draw_world()
+            self.draw_robot()
+            
+            rospy.loginfo(f"Loaded world: {self.world_name} - {self.world_description}")
+    
     def setup_headless_mode(self):
         """Setup headless mode with minimal state tracking"""
         # Robot state
         self.robot_x = 0.0
         self.robot_y = 0.0
-        self.robot_yaw = -math.pi/2  # Robot starts facing left (Y direction) so length is parallel to X
+        self.robot_yaw = 0.0  # Robot starts facing forward (X direction)
         self.robot_state = "unknown"
         self.current_action = "idle"
         self.has_object = False
@@ -362,9 +669,9 @@ class SpotSimulationGUI:
         
         # Objects for state tracking - positioned diagonally around pickup location
         self.objects = {
-            "tomato_can": {"x": 3.0, "y": -1.0, "present": True, "color": "#f85149"},
-            "apple": {"x": 2.8, "y": -0.8, "present": True, "color": "#39d353"},
-            "bottle": {"x": 3.2, "y": -1.2, "present": True, "color": "#58a6ff"}
+            "water_bottle": {"x": 3.0, "y": -1.0, "present": True, "color": "#f85149"},
+            "soda_can": {"x": 2.8, "y": -0.8, "present": True, "color": "#39d353"},
+            "juice_box": {"x": 3.2, "y": -1.2, "present": True, "color": "#58a6ff"}
         }
         
         self.pickup_location = {"x": 3.0, "y": -1.0}
@@ -437,6 +744,19 @@ class SpotSimulationGUI:
         except Exception as e:
             rospy.logwarn(f"Failed to parse robot state: {e}")
     
+    def on_nl_position_update(self, msg):
+        """Handle position updates from NL_Control"""
+        try:
+            # Parse position from NL_Control
+            import json
+            position_data = json.loads(msg.data)
+            self.robot_x = position_data['x']
+            self.robot_y = position_data['y'] 
+            self.robot_yaw = position_data['yaw']
+            rospy.loginfo(f"Updated robot position from NL_Control: ({self.robot_x:.2f}, {self.robot_y:.2f}, {self.robot_yaw:.2f})")
+        except Exception as e:
+            rospy.logwarn(f"Failed to parse NL_Control position: {e}")
+
     def on_execution_feedback(self, msg):
         """Update robot state from execution feedback"""
         try:
@@ -461,31 +781,9 @@ class SpotSimulationGUI:
                                 body_y = float(y_match.group(1))
                                 body_yaw = float(yaw_match.group(1)) if yaw_match else 0.0
                                 
-                                # Convert body frame movement to vision frame displacement
-                                vision_dx, vision_dy = self.body_to_vision(body_x, body_y, body_yaw)
-                                
-                                # Update robot position
-                                # Since the display is rotated 90° counterclockwise, we need to adjust the movement
-                                # World X (forward) becomes display Y (upward)
-                                # World Y (left) becomes display -X (rightward)
-                                # So we need to rotate the movement by 90° counterclockwise
-                                rotated_dx = -vision_dy  # World Y becomes display -X
-                                rotated_dy = vision_dx   # World X becomes display Y
-                                
-                                self.robot_x += rotated_dx
-                                self.robot_y += rotated_dy
-                                self.robot_yaw -= body_yaw  # Negative for counterclockwise rotation
-                                
-                                # Normalize yaw to [-π, π]
-                                while self.robot_yaw > math.pi:
-                                    self.robot_yaw -= 2 * math.pi
-                                while self.robot_yaw < -math.pi:
-                                    self.robot_yaw += 2 * math.pi
-                                
-                                rospy.loginfo(f"Robot moved by ({body_x}, {body_y}, {body_yaw}) in body frame -> "
-                                            f"({vision_dx:.2f}, {vision_dy:.2f}) in vision frame. "
-                                            f"New position: ({self.robot_x:.2f}, {self.robot_y:.2f}, {self.robot_yaw:.2f})")
-                                rospy.loginfo(f"Current robot yaw: {self.robot_yaw:.2f} radians ({math.degrees(self.robot_yaw):.1f} degrees)")
+                                # Position updates are now handled by NL_Control position subscriber
+                                # No need to manually track position here
+                                rospy.loginfo(f"Robot moved by ({body_x}, {body_y}, {body_yaw}) in body frame")
                         except Exception as e:
                             rospy.logwarn(f"Failed to parse movement parameters: {e}")
                             
@@ -632,7 +930,7 @@ class SpotSimulationGUI:
             # Reset robot position and state
             self.robot_x = 0.0
             self.robot_y = 0.0
-            self.robot_yaw = -math.pi/2  # Robot starts facing left (Y direction) so length is parallel to X
+            self.robot_yaw = 0.0  # Robot starts facing forward (X direction)
             self.robot_state = "stand"
             self.current_action = "idle"
             self.has_object = False
@@ -663,9 +961,9 @@ class SpotSimulationGUI:
             
             # Update status labels
             self.state_label.config(text=f"State: {self.robot_state}")
-            # Display yaw with 90 degree offset for display purposes
-            display_yaw = math.degrees(self.robot_yaw) + 90.0
-            self.position_label.config(text=f"Position: ({self.robot_x:.2f}, {self.robot_y:.2f}, {display_yaw:.1f}°)")
+            # Display the actual NL_Control position (not the display yaw)
+            actual_yaw = math.degrees(self.robot_yaw)
+            self.position_label.config(text=f"Position: ({self.robot_x:.2f}, {self.robot_y:.2f}, {actual_yaw:.1f}°)")
             self.action_label.config(text=f"Action: {self.current_action}")
             arm_text = f"Arm: {self.arm_status} | Gripper: {self.gripper_status}"
             if self.has_object:
@@ -676,6 +974,69 @@ class SpotSimulationGUI:
         """Periodic GUI update"""
         self.update_display()
         self.root.after(100, self.periodic_update)  # Update every 100ms
+    
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel scrolling in feedback text"""
+        self.feedback_text.yview_scroll(int(-1 * (event.delta / 120)), "units")
+    
+    def _on_send_command(self, event=None):
+        """Send command to robot"""
+        command = self.command_entry.get().strip()
+        if not command:
+            return
+        
+        rospy.loginfo(f"GUI: Sending command: '{command}'")
+        self.pub_user_speech.publish(String(data=command))
+        
+        # Clear text entry
+        self.command_entry.delete(0, tk.END)
+        
+        # Enable approve/decline buttons
+        self.approve_button.config(state='normal')
+        self.decline_button.config(state='normal')
+    
+    def _on_refresh(self):
+        """Clear text entry"""
+        self.command_entry.delete(0, tk.END)
+        self.approve_button.config(state='disabled')
+        self.decline_button.config(state='disabled')
+    
+    def _on_approve(self):
+        """Approve pending plan"""
+        rospy.loginfo("GUI: Approving plan")
+        import json
+        self.pub_approval.publish(String(data=json.dumps({"plan_id": 0, "approved": True})))
+        self.approve_button.config(state='disabled')
+        self.decline_button.config(state='disabled')
+    
+    def _on_decline(self):
+        """Decline pending plan"""
+        rospy.loginfo("GUI: Declining plan")
+        import json
+        self.pub_approval.publish(String(data=json.dumps({"plan_id": 0, "approved": False})))
+        self.approve_button.config(state='disabled')
+        self.decline_button.config(state='disabled')
+    
+    def _on_interpretation(self, msg):
+        """Handle natural language interpretation from orchestrator"""
+        try:
+            interpretation = msg.data.strip()
+            if interpretation:
+                rospy.loginfo(f"GUI: Received interpretation: {interpretation}")
+                # Update feedback text with only natural language interpretation
+                self.feedback_text.config(state=tk.NORMAL)
+                self.feedback_text.delete(1.0, tk.END)
+                
+                # Add only the interpretation, no coordinate system info
+                self.feedback_text.insert(tk.END, interpretation)
+                self.feedback_text.config(state=tk.DISABLED)
+        except Exception as e:
+            rospy.logwarn(f"Failed to parse interpretation: {e}")
+    
+    def _on_stop(self):
+        """Send stop signal to robot"""
+        rospy.loginfo("GUI: Sending stop signal")
+        self.pub_stop.publish(Empty())
     
     def run(self):
         """Start the GUI or headless mode"""
@@ -697,8 +1058,16 @@ class SpotSimulationGUI:
             self.root.mainloop()
 
 if __name__ == '__main__':
+    import sys
+    
+    # Check for world selection argument
+    world_id = None
+    if len(sys.argv) > 1:
+        world_id = sys.argv[1]
+        print(f"Starting GUI with world: {world_id}")
+    
     try:
-        gui = SpotSimulationGUI()
+        gui = SpotSimulationGUI(world_id=world_id)
         gui.run()
     except rospy.ROSInterruptException:
         pass
