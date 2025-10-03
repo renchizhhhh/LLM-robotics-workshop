@@ -116,8 +116,8 @@ class SpotStateMachine(StateMachine):
         """Check `/spot_entrance/robot_state` and align FSM to the most specific state."""
         try:
             if self.dummy_mode:
-                rospy.loginfo('FSM: Dummy mode - assuming connected')
-                self.send('discover_connected')
+                rospy.loginfo('FSM: Dummy mode - assuming powered_off')
+                self.send('discover_stand')
                 return
 
             msg = rospy.wait_for_message('/spot_entrance/robot_state', String, timeout=timeout)
