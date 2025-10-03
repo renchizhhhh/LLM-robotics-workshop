@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import rospy
 import time
 
@@ -46,8 +47,15 @@ class SpotRobotManager:
             bosdyn.client.util.setup_logging(verbose)
             self.sdk = bosdyn.client.create_standard_sdk('SpotRobotManager')
             self.robot = self.sdk.create_robot(hostname)
-            bosdyn.client.util.authenticate(self.robot)
-            rospy.loginfo("Spot entrance authenticated with robot using provided credentials")
+            
+            try:
+                # Use environment variables for authentication
+                username = os.getenv('SPOT_USERNAME', 'user')
+                password = os.getenv('SPOT_PASSWORD', 'corspotuser1')
+                self.robot.authenticate(username, password)
+                rospy.loginfo("Spot entrance authenticated with robot using environment credentials")
+            except Exception as e:
+                rospy.logwarn(f"Authentication with robot may have failed (exception: {e}). Ensure credentials are available.")
             
             # Initialize clients
             self.lease_client = self.robot.ensure_client(bosdyn.client.lease.LeaseClient.default_service_name)

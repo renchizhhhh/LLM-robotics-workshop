@@ -15,6 +15,7 @@ Provides services:
 Publishes:
   /estop/status (std_msgs/String) -> "NOT_STOPPED" / "STOPPED" / "ERROR"
 """
+import os
 import rospy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerResponse
@@ -57,8 +58,11 @@ class EstopRosNode(object):
             robot = sdk.create_robot(hostname)
             
             try:
-                bosdyn.client.util.authenticate(robot)
-                rospy.loginfo("Estop node authenticated with robot using provided credentials")
+                # Use environment variables for authentication
+                username = os.getenv('SPOT_USERNAME', 'user')
+                password = os.getenv('SPOT_PASSWORD', 'corspotuser1')
+                robot.authenticate(username, password)
+                rospy.loginfo("Estop node authenticated with robot using environment credentials")
             except Exception as e:
                 rospy.logwarn("Authentication with robot may have failed (exception: %s). Ensure credentials are available.", e)
 

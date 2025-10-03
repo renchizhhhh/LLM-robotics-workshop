@@ -10,8 +10,8 @@ from statemachine import StateMachine, State
 import actionlib
 from std_srvs.srv import Trigger
 from std_msgs.msg import String
-from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest, GetInitialPose, GetInitialPoseRequest, ArmCommand, ArmCommandRequest
-from spot_hololens_llm_interface.msg import AutomatedGraspAction, AutomatedGraspGoal
+from spot_hololens_llm_interface.srv import MoveToPosition, MoveToPositionRequest, GetImage, GetImageRequest, GetInitialPose, GetInitialPoseRequest, GetRobotPose, GetRobotPoseRequest, ArmCommand, ArmCommandRequest
+from spot_hololens_llm_interface.msg import AutomatedGraspAction, AutomatedGraspGoal, MoveArmPoseAction, MoveArmPoseGoal
 
 # Add the scripts directory to the path to import timing_utils
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'scripts'))
@@ -35,6 +35,9 @@ class SpotStateMachine(StateMachine):
     stand = State()
     moving = State()
     grasping = State()
+    carry = State()
+    move_arm_pose = State()
+    arm_command = State()
 
     # Transitions
     discover_connected = unknown.to(connected)
@@ -46,13 +49,18 @@ class SpotStateMachine(StateMachine):
     power_on = connected.to(powered_off)
     stand_up = (powered_off.to(stand) | sit.to(stand))
     sit_down = (stand.to(sit) | moving.to(sit) | grasping.to(sit))
-    start_moving = (stand.to(moving) | moving.to(moving))
+    start_moving = (stand.to(moving) | moving.to(moving) | carry.to(moving))
     stop_moving = moving.to(stand)
     get_image = (stand.to(stand) | moving.to(moving) | sit.to(sit))
     get_initial_pose = (stand.to(stand) | moving.to(moving) | sit.to(sit))
-    arm_command = (stand.to(stand) | moving.to(moving))
-    start_automated_grasp = (stand.to(grasping))
-    finish_automated_grasp = (grasping.to(stand))
+    start_arm_command = (stand.to(arm_command) | moving.to(arm_command) | carry.to(arm_command))
+    finish_arm_command = (arm_command.to(stand))
+    start_automated_grasp = (stand.to(grasping) | moving.to(grasping))
+    finish_automated_grasp = (grasping.to(carry))
+    start_move_arm_pose = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | carry.to(move_arm_pose))
+    finish_move_arm_pose = (move_arm_pose.to(stand))
+    carry_to_stand = carry.to(stand)
+    stand_to_carry = stand.to(carry)
     power_off_from_stand = stand.to(powered_off)
     power_off_from_sit = sit.to(powered_off)
     disconnect = powered_off.to(disconnected)
@@ -92,15 +100,18 @@ class SpotStateMachine(StateMachine):
         self.move_srv = self.create_service_proxy('/spot_entrance/move_to_position', MoveToPosition)
         self.get_image_srv = self.create_service_proxy('/spot_entrance/get_image', GetImage)
         self.get_initial_pose_srv = self.create_service_proxy('/spot_entrance/get_initial_pose', GetInitialPose)
+        self.get_robot_pose_srv = self.create_service_proxy('/spot_entrance/get_robot_pose', GetRobotPose)
         self.arm_command_srv = self.create_service_proxy('/spot_entrance/arm_command', ArmCommand)
         self.power_off_srv = self.create_service_proxy('/spot_entrance/power_off', Trigger)
         self.disconnect_srv = self.create_service_proxy('/spot_entrance/disconnect', Trigger)
         
-        # Setup action client for automated grasp
+        # Setup action clients
         self.automated_grasp_client = actionlib.SimpleActionClient('automated_grasp', AutomatedGraspAction)
+        self.move_arm_pose_client = actionlib.SimpleActionClient('move_arm_pose', MoveArmPoseAction)
         if not self.dummy_mode:
             self.automated_grasp_client.wait_for_server(rospy.Duration(5.0))
-            rospy.loginfo("FSM: Connected to automated_grasp action server")
+            self.move_arm_pose_client.wait_for_server(rospy.Duration(5.0))
+            rospy.loginfo("FSM: Connected to action servers")
         
         # Initialize the state machine after setting up services
         super().__init__()
@@ -116,8 +127,18 @@ class SpotStateMachine(StateMachine):
         """Check `/spot_entrance/robot_state` and align FSM to the most specific state."""
         try:
             if self.dummy_mode:
-                rospy.loginfo('FSM: Dummy mode - assuming powered_off')
-                self.send('discover_stand')
+                rospy.loginfo('FSM: Dummy mode - simulating full startup sequence')
+                self.send('discover_connected')
+                # Auto-power on in dummy mode for easier testing
+                rospy.sleep(0.1)  # Small delay to ensure state transition
+                self.send('power_on')
+                return
+            else:
+                rospy.loginfo('FSM: Real robot mode - starting automatic connection sequence')
+                # Auto-connect and power on for real robot
+                self.send('discover_connected')
+                rospy.sleep(0.5)  # Allow connection to complete
+                self.send('power_on')
                 return
 
             msg = rospy.wait_for_message('/spot_entrance/robot_state', String, timeout=timeout)
@@ -176,6 +197,12 @@ class SpotStateMachine(StateMachine):
         result = self._call_service(self.sit_srv, "Sit")
         recorder.publish_event('stop_sit_down')
 
+    def on_enter_carry(self):
+        rospy.loginfo("FSM: Moving to carry position")
+        recorder.publish_event('start_carry')
+        self._call_arm_command_service("carry")
+        recorder.publish_event('stop_carry')
+
     def on_enter_moving(self):
         # Get parameters from kwargs if available, otherwise use stored ones
         kwargs = getattr(self, '_current_kwargs', {})
@@ -214,6 +241,30 @@ class SpotStateMachine(StateMachine):
         recorder.publish_event('start_arm_command')
         self._call_arm_command_service(command_type)
         recorder.publish_event('stop_arm_command')
+        
+        # Always return to stand state after arm command
+        self.finish_arm_command()
+
+    def on_enter_move_arm_pose(self):
+        # Get parameters from kwargs
+        kwargs = getattr(self, '_current_kwargs', {})
+        x = kwargs.get('x', 0.8)
+        y = kwargs.get('y', 0.0)
+        z = kwargs.get('z', 0.3)
+        qw = kwargs.get('qw', 0.7071)
+        qx = kwargs.get('qx', 0.7071)
+        qy = kwargs.get('qy', 0.0)
+        qz = kwargs.get('qz', 0.0)
+        duration = kwargs.get('duration', 3.0)
+        open_gripper = kwargs.get('open_gripper', False)
+        
+        rospy.loginfo(f"FSM: Moving arm to pose ({x}, {y}, {z})")
+        recorder.publish_event('start_move_arm_pose')
+        result = self._call_move_arm_pose_action(x, y, z, qw, qx, qy, qz, duration, open_gripper)
+        recorder.publish_event('stop_move_arm_pose')
+        
+        # Always return to stand state after move_arm_pose
+        self.finish_move_arm_pose()
 
     def on_enter_grasping(self):
         # Get parameters from kwargs
@@ -366,6 +417,51 @@ class SpotStateMachine(StateMachine):
             rospy.logerr(f"FSM: Automated grasp action failed with exception: {e}")
             return False
 
+    def _call_move_arm_pose_action(self, x, y, z, qw, qx, qy, qz, duration, open_gripper):
+        """Helper to call move arm pose action"""
+        if self.dummy_mode:
+            rospy.loginfo(f"FSM: DUMMY MODE - Simulating move arm pose to ({x}, {y}, {z})")
+            rospy.sleep(2.0)  # Simulate time for arm movement in dummy mode
+            return True
+            
+        try:
+            # Create goal for move arm pose action
+            goal = MoveArmPoseGoal()
+            goal.x = x
+            goal.y = y
+            goal.z = z
+            goal.qw = qw
+            goal.qx = qx
+            goal.qy = qy
+            goal.qz = qz
+            goal.duration = duration
+            goal.open_gripper = open_gripper
+            
+            # Send goal and wait for result (with timeout)
+            rospy.loginfo(f"FSM: Sending move arm pose goal to ({x}, {y}, {z})")
+            self.move_arm_pose_client.send_goal(goal)
+            
+            # Wait for result with timeout (10 seconds is reasonable for arm movement)
+            finished = self.move_arm_pose_client.wait_for_result(rospy.Duration(10.0))
+            
+            if not finished:
+                rospy.logerr("FSM: Move arm pose action timed out")
+                self.move_arm_pose_client.cancel_goal()
+                return False
+            
+            # Get and process result
+            result = self.move_arm_pose_client.get_result()
+            if result and result.success:
+                rospy.loginfo(f"FSM: Move arm pose succeeded! {result.message}")
+                return True
+            else:
+                rospy.logerr(f"FSM: Move arm pose failed: {result.message if result else 'Unknown error'}")
+                return False
+                
+        except Exception as e:
+            rospy.logerr(f"FSM: Move arm pose action failed with exception: {e}")
+            return False
+
     # Helper methods
     def _call_service(self, service, name):
         """Helper to call a service and log result"""
@@ -383,6 +479,16 @@ class SpotStateMachine(StateMachine):
             mode_text = " (dummy)" if self.dummy_mode else ""
             rospy.logerr(f"FSM: {name} service call failed{mode_text}: {e}")
             return False
+
+    def get_robot_pose(self):
+        """Get current robot pose in vision frame."""
+        try:
+            req = GetRobotPoseRequest()
+            resp = self.get_robot_pose_srv(req)
+            return resp
+        except Exception as e:
+            rospy.logerr(f"FSM: Robot pose service call failed: {e}")
+            return None
 
     def _call_move_service(self, x=None, y=None, yaw=None, frame=None):
         """Helper to call move service with provided or default parameters"""

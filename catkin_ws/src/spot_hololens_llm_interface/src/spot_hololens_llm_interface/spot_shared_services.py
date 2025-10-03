@@ -29,10 +29,17 @@ def _wait_for_feedback(cmd_client, command_id, est_duration, use_block=None):
     """Wait for command feedback."""
     # If caller requests SDK blocking helpers, try those first and fall back to polling.
     timeout_slack = 5.0
+    success = False  # Default to False
+    
     if use_block == 'trajectory':
         success = block_for_trajectory_cmd(cmd_client, command_id, timeout_sec=est_duration + timeout_slack)
-    if use_block == 'arm':
+    elif use_block == 'arm':
         success = block_until_arm_arrives(cmd_client, command_id, timeout_sec=est_duration + timeout_slack)
+    elif use_block == 'gripper':
+        # For gripper commands, just wait a short time and assume success
+        import time
+        time.sleep(1.0)  # Give gripper time to complete
+        success = True  # Assume gripper commands complete successfully
     
     try:
         fb = cmd_client.robot_command_feedback(command_id)
@@ -369,19 +376,23 @@ class SpotSharedServices:
             
             if req.command_type == "open":
                 cmd = RobotCommandBuilder.claw_gripper_open_command()
+                use_block = 'gripper'
             elif req.command_type == "close":
                 cmd = RobotCommandBuilder.claw_gripper_close_command()
+                use_block = 'gripper'
             elif req.command_type == "stow":
                 cmd = RobotCommandBuilder.arm_stow_command()
+                use_block = 'arm'
             elif req.command_type == "carry":
                 cmd = RobotCommandBuilder.arm_carry_command()
+                use_block = 'arm'
             else:
                 response.success = False
                 response.message = f"Unknown arm command: {req.command_type}"
                 return response
             
             cmd_id = clients['command'].robot_command(cmd, end_time_secs=time.time() + 3)
-            ok, status_name = _wait_for_feedback(clients['command'], cmd_id, 3.0, use_block='arm')
+            ok, status_name = _wait_for_feedback(clients['command'], cmd_id, 3.0, use_block=use_block)
             if not ok:
                 response.success = False
                 response.message = f"Arm did not reach target position in time (status={status_name})"
