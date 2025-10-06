@@ -87,8 +87,17 @@ class SpotGraspActionServer:
             auto_start=False
         )
         self.automated_grasp_server.start()
-        rospy.loginfo("Spot grasp action server started with direct robot manager access")
-    
+
+        # Action server for drop off (move arm to drop off pose)
+        self.drop_off_server = actionlib.SimpleActionServer(
+            'drop_off_object',
+            MoveArmPoseAction,
+            execute_cb=self.execute_drop_off_cb,
+            auto_start=False
+        )
+        self.drop_off_server.start()
+
+
     def execute_interactive_grasp_cb(self, goal):
         """Execute interactive grasp with user clicking on image"""
         rospy.loginfo("Executing interactive grasp")
@@ -796,71 +805,21 @@ class SpotGraspActionServer:
                 self.move_arm_server.set_aborted(result)
                 return
 
-            cmd_client = clients['command']
-            state_client = clients['robot_state']
-
-            # Move to the <hold pose>
-            x = goal.x
-            y = goal.y
-            z = goal.z
-            hand_ewrt_flat_body = geometry_pb2.Vec3(x=x, y=y, z=z)
-            qw = goal.qw
-            qx = goal.qx
-            qy = goal.qy
-            qz = goal.qz
-            flat_body_Q_hand = geometry_pb2.Quaternion(w=qw, x=qx, y=qy, z=qz)
-            flat_body_T_hand = geometry_pb2.SE3Pose(position=hand_ewrt_flat_body,
-                                                    rotation=flat_body_Q_hand)
+            feedback.current_state = 'MOVING'
+            feedback.progress = 0.0
+            self.move_arm_server.publish_feedback(feedback)
             
-            robot_state = state_client.get_robot_state()
-            odom_T_flat_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
-                                            ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
-            odom_T_hand = odom_T_flat_body * math_helpers.SE3Pose.from_proto(flat_body_T_hand)
-
-            # Build arm pose command in odom frame
-            seconds = max(0.1, goal.duration) if hasattr(goal, 'duration') else 2.0
-
-            arm_cmd = RobotCommandBuilder.arm_pose_command(
-                odom_T_hand.x, odom_T_hand.y, odom_T_hand.z, odom_T_hand.rot.w, odom_T_hand.rot.x,
-                odom_T_hand.rot.y, odom_T_hand.rot.z, ODOM_FRAME_NAME, seconds)
-
-            # Optionally set gripper state
-            grip_cmd = RobotCommandBuilder.claw_gripper_open_fraction_command(1 if goal.open_gripper else 0)
-            cmd = RobotCommandBuilder.build_synchro_command(grip_cmd, arm_cmd)
-
-            cmd_id = cmd_client.robot_command(cmd)
-
-            # Monitor feedback until finished or preempted
-            while not rospy.is_shutdown():
-                if self.move_arm_server.is_preempt_requested():
-                    result.success = False
-                    result.message = 'Preempted'
-                    self.move_arm_server.set_preempted(result)
-                    return
-
-                try:
-                    fb = cmd_client.robot_command_feedback(cmd_id)
-                    arm_fb = fb.feedback.synchronized_feedback.arm_command_feedback.arm_cartesian_feedback
-                    # Compute crude progress metric based on measured_pos_distance_to_goal
-                    pos_dist = arm_fb.measured_pos_distance_to_goal
-                    rot_dist = arm_fb.measured_rot_distance_to_goal
-                    feedback.current_state = 'MOVING'
-                    # Simple mapping: large distance -> 0.0, small -> 1.0
-                    progress = float(max(0.0, min(1.0, 1.0 - (pos_dist / (pos_dist + 0.001)))))
-                    feedback.progress = progress
-                    self.move_arm_server.publish_feedback(feedback)
-
-                    if arm_fb.status == arm_command_pb2.ArmCartesianCommand.Feedback.STATUS_TRAJECTORY_COMPLETE:
-                        break
-                except Exception:
-                    # Ignore transient errors while polling
-                    pass
-
-                time.sleep(0.1)
-
-            result.success = True
-            result.message = 'Move completed'
-            self.move_arm_server.set_succeeded(result)
+            # Use the helper method to execute the move
+            success = self._execute_arm_move(goal, self.move_arm_server, feedback, 
+                                            progress_offset=0.0, progress_scale=1.0)
+            
+            result.success = success
+            result.message = 'Move completed' if success else 'Move failed'
+            
+            if success:
+                self.move_arm_server.set_succeeded(result)
+            else:
+                self.move_arm_server.set_aborted(result)
 
         except Exception as e:
             rospy.logerr(f"move_arm_pose failed: {e}")
@@ -868,6 +827,146 @@ class SpotGraspActionServer:
             result.message = str(e)
             self.move_arm_server.set_aborted(result)
 
+    def execute_drop_off_cb(self, goal):
+        """Execute drop off sequence: move to position, open gripper, close gripper, stow arm"""
+        rospy.loginfo("Executing drop off object sequence")
+        
+        result = MoveArmPoseResult()
+        feedback = MoveArmPoseFeedback()
+        
+        try:
+            clients = self.robot_manager.get_clients()
+            if not clients or 'command' not in clients or clients['command'] is None:
+                result.success = False
+                result.message = "Command client not available"
+                self.drop_off_server.set_aborted(result)
+                return
+
+            cmd_client = clients['command']
+
+            # Step 1: Move arm to drop-off pose
+            feedback.current_state = 'MOVING_TO_DROP_POSITION'
+            feedback.progress = 0.1
+            self.drop_off_server.publish_feedback(feedback)
+            
+            assert(goal.open_gripper == False, "Gripper should be closed when dropping off")
+            # Execute the move by calling the internal logic
+            move_result = self._execute_arm_move(goal, self.drop_off_server, feedback, progress_offset=0.1, progress_scale=0.25)
+            
+            if not move_result:
+                result.success = False
+                result.message = 'Failed to move to drop position'
+                self.drop_off_server.set_aborted(result)
+                return
+
+            # Step 2: Open gripper to release object
+            feedback.current_state = 'OPENING_GRIPPER'
+            feedback.progress = 0.4
+            self.drop_off_server.publish_feedback(feedback)
+            
+            open_cmd = RobotCommandBuilder.claw_gripper_open_command()
+            cmd_client.robot_command(open_cmd, end_time_secs=time.time() + 2)
+            time.sleep(1.5)
+
+            if self.drop_off_server.is_preempt_requested():
+                result.success = False
+                result.message = 'Preempted during gripper open'
+                self.drop_off_server.set_preempted(result)
+                return
+
+            # Step 3: Close gripper
+            feedback.current_state = 'CLOSING_GRIPPER'
+            feedback.progress = 0.6
+            self.drop_off_server.publish_feedback(feedback)
+            
+            close_cmd = RobotCommandBuilder.claw_gripper_close_command()
+            cmd_client.robot_command(close_cmd, end_time_secs=time.time() + 2)
+            time.sleep(1.5)
+
+            if self.drop_off_server.is_preempt_requested():
+                result.success = False
+                result.message = 'Preempted during gripper close'
+                self.drop_off_server.set_preempted(result)
+                return
+
+            # Step 4: Stow arm
+            feedback.current_state = 'STOWING_ARM'
+            feedback.progress = 0.8
+            self.drop_off_server.publish_feedback(feedback)
+            
+            stow_cmd = RobotCommandBuilder.arm_stow_command()
+            cmd_client.robot_command(stow_cmd, end_time_secs=time.time() + 3)
+            time.sleep(2.5)
+
+            # Complete
+            feedback.current_state = 'COMPLETED'
+            feedback.progress = 1.0
+            self.drop_off_server.publish_feedback(feedback)
+
+            result.success = True
+            result.message = 'Drop off sequence completed successfully'
+            self.drop_off_server.set_succeeded(result)
+
+        except Exception as e:
+            rospy.logerr(f"drop_off_object failed: {e}")
+            result.success = False
+            result.message = str(e)
+            self.drop_off_server.set_aborted(result)
+
+    def _execute_arm_move(self, goal, action_server, feedback, progress_offset=0.0, progress_scale=1.0):
+        """Helper method to execute arm movement. Returns True on success, False on failure."""
+        try:
+            clients = self.robot_manager.get_clients()
+            cmd_client = clients['command']
+            state_client = clients['robot_state']
+
+            # Build arm pose command
+            hand_ewrt_flat_body = geometry_pb2.Vec3(x=goal.x, y=goal.y, z=goal.z)
+            flat_body_Q_hand = geometry_pb2.Quaternion(w=goal.qw, x=goal.qx, y=goal.qy, z=goal.qz)
+            flat_body_T_hand = geometry_pb2.SE3Pose(position=hand_ewrt_flat_body, rotation=flat_body_Q_hand)
+            
+            robot_state = state_client.get_robot_state()
+            odom_T_flat_body = get_a_tform_b(robot_state.kinematic_state.transforms_snapshot,
+                                        ODOM_FRAME_NAME, GRAV_ALIGNED_BODY_FRAME_NAME)
+            odom_T_hand = odom_T_flat_body * math_helpers.SE3Pose.from_proto(flat_body_T_hand)
+
+            seconds = max(0.1, goal.duration) if hasattr(goal, 'duration') else 2.0
+            arm_cmd = RobotCommandBuilder.arm_pose_command(
+                odom_T_hand.x, odom_T_hand.y, odom_T_hand.z, 
+                odom_T_hand.rot.w, odom_T_hand.rot.x, odom_T_hand.rot.y, odom_T_hand.rot.z, 
+                ODOM_FRAME_NAME, seconds)
+
+            grip_cmd = RobotCommandBuilder.claw_gripper_open_fraction_command(1 if goal.open_gripper else 0)
+            cmd = RobotCommandBuilder.build_synchro_command(grip_cmd, arm_cmd)
+            cmd_id = cmd_client.robot_command(cmd)
+
+            # Monitor movement progress
+            while not rospy.is_shutdown():
+                if action_server.is_preempt_requested():
+                    return False
+
+                try:
+                    fb = cmd_client.robot_command_feedback(cmd_id)
+                    arm_fb = fb.feedback.synchronized_feedback.arm_command_feedback.arm_cartesian_feedback
+                    
+                    if arm_fb.status == arm_command_pb2.ArmCartesianCommand.Feedback.STATUS_TRAJECTORY_COMPLETE:
+                        break
+                    
+                    # Update progress
+                    pos_dist = arm_fb.measured_pos_distance_to_goal
+                    progress = max(0.0, min(1.0, 1.0 - (pos_dist / (pos_dist + 0.001))))
+                    feedback.progress = progress_offset + (progress * progress_scale)
+                    action_server.publish_feedback(feedback)
+                except Exception:
+                    pass
+
+                time.sleep(0.1)
+
+        except Exception as e:
+            rospy.logerr(f"Arm move failed: {e}")
+            return False
+        
+        return True
 
 if __name__ == '__main__':
     rospy.init_node('spot_grasp_action_server')

@@ -1,8 +1,6 @@
 <launch>
     <!-- Parameters -->
     <arg name="hostname" default="192.168.1.109" />
-    <arg name="use_cv_interface" default="true" />
-    <arg name="image_topic" default="/spot/camera/frontright_fisheye/image" />
     <arg name="verbose" default="false" />
 
     <!-- Estop ROS node: set hostname and timeout here -->
