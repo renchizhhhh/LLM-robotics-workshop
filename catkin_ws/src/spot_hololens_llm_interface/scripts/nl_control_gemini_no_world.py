@@ -100,6 +100,10 @@ class NaturalLanguageControl:
         rospy.init_node('nl_control', anonymous=True)
         self.use_speech = use_speech
         
+        # Get world_id from ROS parameter if not provided
+        if world_id is None:
+            world_id = rospy.get_param('~world_id', '1')
+        
         # Position tracking - will get actual position from robot
         self.current_position = [0.0, 0.0, 0.0]  # [x, y, yaw] relative to start position
         self.start_position = None  # Will be set on first position read
@@ -124,16 +128,31 @@ class NaturalLanguageControl:
             else:
                 self.world_model = self.load_world_model()
             rospy.loginfo("World model loaded successfully")
+            
+            # Initialize prompt template with current world model
+            self._update_prompt_template()
         except Exception as e:
             rospy.logerr(f"Error loading world model: {e}")
             self.world_model = self.load_world_model()
+            self._update_prompt_template()
         
         # Publisher for position updates
         self.pub_position = rospy.Publisher('/nl_control/robot_position', String, queue_size=1)
         
+        # Publisher for interpretation feedback
+        self.pub_interpretation = rospy.Publisher('/llm_int/interpretation', String, queue_size=10)
+        
         # HoloLens stop signal handling
         self.stop_requested = False
         self.sub_hl_stop = rospy.Subscriber('/hl/stop', Empty, self.on_hl_stop)
+        
+        # World change handling
+        self.sub_world_change = rospy.Subscriber('/gui/world_change', String, self.on_world_change)
+        
+        # Approval handling
+        self.sub_approval = rospy.Subscriber('/hl/approval', String, self.on_approval)
+        self.pending_plan = []
+        self.awaiting_approval = False
         
         # Check if dummy mode is set globally (try multiple locations)
         dummy_mode = rospy.get_param('/spot_fsm/dummy_mode', 
@@ -219,26 +238,73 @@ class NaturalLanguageControl:
             rospy.loginfo("Ready (LLM disabled)")
     
     def load_world_model(self):
-        """Load world model configuration. Can be extended to load from file."""
-        # Default world model - can be overridden or loaded from file
-        return {
-            "waypoints": {
-                "PickA": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                "DropA": {"x": 2.0, "y": 0.5, "z": 0.0, "pick_yaw": None, "drop_yaw": 1.57}
-            },
-            "zones": {},
-            "synonyms": {
-                "pick-up location": "PickA",
-                "drop-off location": "DropA",
-                "pick up location": "PickA",
-                "drop off location": "DropA"
+        """Load world model configuration using WorldManager."""
+        # Use the same world as the GUI if available, otherwise default to world 1
+        try:
+            if hasattr(self, 'world_manager') and self.world_manager:
+                # Use the same world configuration as the GUI
+                return self.world_manager.get_world_config("1")  # Default to world 1
+            else:
+                # Fallback to simple world if WorldManager not available
+                return {
+                    "waypoints": {
+                        "Beverages": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                    },
+                    "zones": {
+                        "DeliveryArea": {
+                            "centroid": {"x": 2.0, "y": 0.5, "z": 0.0},
+                            "yaw_hint": 1.57,
+                            "tags": ["delivery", "drop-off", "destination"]
+                        }
+                    },
+                    "synonyms": {
+                        "beverages": "Beverages",
+                        "drinks": "Beverages",
+                        "delivery area": "DeliveryArea",
+                        "drop-off area": "DeliveryArea"
+                    }
+                }
+        except Exception as e:
+            rospy.logwarn(f"Failed to load world model from WorldManager: {e}")
+            # Fallback to simple world
+            return {
+                "waypoints": {
+                    "Beverages": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                },
+                "zones": {
+                    "DeliveryArea": {
+                        "centroid": {"x": 2.0, "y": 0.5, "z": 0.0},
+                        "yaw_hint": 1.57,
+                        "tags": ["delivery", "drop-off", "destination"]
+                    }
+                },
+                "synonyms": {
+                    "beverages": "Beverages",
+                    "drinks": "Beverages",
+                    "delivery area": "DeliveryArea",
+                    "drop-off area": "DeliveryArea"
+                }
             }
-        }
     
     def update_world_model(self, new_world_model):
         """Update the world model configuration."""
         self.world_model = new_world_model
         rospy.loginfo("World model updated")
+    
+    def switch_world(self, world_id):
+        """Switch to a different world configuration."""
+        try:
+            if world_id in self.world_manager.worlds:
+                self.world_model = self.world_manager.get_world_config(world_id)
+                world_name, world_desc = self.world_manager.get_world_info(world_id)
+                rospy.loginfo(f"Switched to world: {world_name} - {world_desc}")
+                return True
+            else:
+                rospy.logwarn(f"Invalid world ID: {world_id}")
+                return False
+        except Exception as e:
+            rospy.logerr(f"Failed to switch world: {e}")
+            return False
     
     def load_world_model_from_file(self, filepath):
         """Load world model from JSON file."""
@@ -334,8 +400,9 @@ class NaturalLanguageControl:
             return False
         
     def setup_llm(self):
-        """Setup Gemini API."""
+        """Setup Gemini API for planning and OpenAI for interpretation."""
         try:
+            # Setup Gemini for plan generation
             api_key = os.getenv('GOOGLE_API_KEY')
             if not api_key:
                 rospy.logwarn("No GOOGLE_API_KEY environment variable found - LLM disabled")
@@ -345,9 +412,20 @@ class NaturalLanguageControl:
             rospy.loginfo("Setting up Gemini LLM...")
             rospy.loginfo(f"API key found: {api_key[:10]}...")
             self.llm = genai.Client(api_key=api_key)
-            rospy.loginfo("LLM ready")
+            rospy.loginfo("Gemini LLM ready")
+            
+            # Setup OpenAI for plan interpretation (like orchestrator)
+            import openai
+            openai_api_key = os.getenv('OPENAI_API_KEY')
+            if openai_api_key:
+                self.openai_client = openai.OpenAI(api_key=openai_api_key)
+                rospy.loginfo("OpenAI client ready for plan interpretation")
+            else:
+                rospy.logwarn("No OPENAI_API_KEY - plan interpretation will use fallback")
+                self.openai_client = None
+                
         except Exception as e:
-            rospy.logerr(f"Failed to setup Gemini client: {e}")
+            rospy.logerr(f"Failed to setup LLM client: {e}")
             rospy.logerr(f"LLM will be disabled. Error details: {str(e)}")
             self.llm = None
             raise
@@ -481,20 +559,18 @@ class NaturalLanguageControl:
                             move_y = params.get('y', 0.0)
                             move_yaw = params.get('yaw', 0.0)
                             
-                            # Transform body frame movement to world frame
+                            # Transform body frame movement to world frame using 2D rotation
                             # Body frame: x=forward, y=left
-                            # World frame: x=forward, y=left (same in this case)
+                            # World frame: x=forward, y=left
+                            # At yaw=0: body x -> world x, body y -> world y
+                            # At yaw=π/2: body x -> world y, body y -> world -x
+                            # Standard 2D rotation matrix: [cos -sin; sin cos]
                             cos_yaw = math.cos(self.current_position[2])
                             sin_yaw = math.sin(self.current_position[2])
                             
-                            # Transform body frame movement to world frame
-                            # When robot is rotated by yaw, body frame movements need to be rotated
-                            # For a robot facing direction yaw, body frame (x,y) becomes world frame:
-                            # Standard rotation matrix but with corrected coordinate system
-                            # Body frame: x=forward, y=left (positive left)
-                            # World frame: x=forward, y=left (positive left) 
-                            world_dx = move_x * cos_yaw + move_y * sin_yaw
-                            world_dy = -move_x * sin_yaw + move_y * cos_yaw
+                            # Apply rotation matrix to transform body movement to world frame
+                            world_dx = move_x * cos_yaw - move_y * sin_yaw
+                            world_dy = move_x * sin_yaw + move_y * cos_yaw
                             
                             self.current_position[0] += world_dx
                             self.current_position[1] += world_dy
@@ -556,24 +632,45 @@ class NaturalLanguageControl:
         for i, action in enumerate(actions, 1):
             print(f"  {i}. {action}")
         
+        # Generate natural language interpretation
+        natural_plan = self._interpret_plan(actions)
+        
+        # Create plan text with both technical and natural language (like orchestrator)
+        plan_text = f"NL Control plan (awaiting approval):\n\nNatural Language: {natural_plan}\n\nTechnical Steps:\n" + "\n".join(f"{i+1}. {a}" for i, a in enumerate(actions))
+        
+        # Publish interpretation to GUI
+        self.pub_interpretation.publish(String(data=plan_text))
+        rospy.loginfo(f"GUI: Received interpretation: {plan_text}")
+        
         # Publish timing event for user confirmation start
         recorder.publish_event('start_user_confirmation')
         
-        confirm = input("\nExecute this plan? (y/n): ").strip().lower()
-        
-        # Publish timing event for user confirmation end
-        recorder.publish_event('stop_user_confirmation')
-        
-        if confirm in ['y', 'yes']:
-            print("Executing...")
-            self.execute_actions(actions)
+        # In speech mode, wait for approval like orchestrator HA mode
+        if self.use_speech:
+            rospy.loginfo("Speech mode: waiting for approval")
+            self.pending_plan = actions
+            self.awaiting_approval = True
         else:
-            print("Cancelled - try a new command")
+            # Terminal mode: ask for confirmation
+            confirm = input("\nExecute this plan? (y/n): ").strip().lower()
+            
+            # Publish timing event for user confirmation end
+            recorder.publish_event('stop_user_confirmation')
+            
+            if confirm in ['y', 'yes']:
+                print("Executing...")
+                self.execute_actions(actions)
+            else:
+                print("Cancelled - try a new command")
     
     def run(self):
         """Main loop."""
         print("\nNatural Language Control Ready!")
-        print("Type commands or 'quit' to exit\n")
+        if self.use_speech:
+            print("Speech mode: listening on /hl/user_speech")
+        else:
+            print("Terminal mode: type commands or 'quit' to exit")
+        print()
         
         while not rospy.is_shutdown():
             try:
@@ -606,6 +703,113 @@ class NaturalLanguageControl:
         rospy.loginfo("HoloLens stop signal received - will finish current task and stop plan execution")
         self.stop_requested = True
     
+    def on_world_change(self, msg):
+        """Handle world change from GUI."""
+        world_id = msg.data
+        rospy.loginfo(f"World change received: {world_id}")
+        if self.switch_world(world_id):
+            rospy.loginfo(f"Successfully switched to world {world_id}")
+            # Update the prompt template with new world model
+            self._update_prompt_template()
+        else:
+            rospy.logwarn(f"Failed to switch to world {world_id}")
+    
+    def on_approval(self, msg):
+        """Handle approval from GUI."""
+        try:
+            import json
+            payload = json.loads(msg.data)
+        except Exception as e:
+            rospy.logwarn(f"Invalid JSON on /hl/approval: {e}")
+            return
+        
+        if not self.awaiting_approval:
+            rospy.logwarn("Plan not awaiting approval, ignoring /hl/approval message")
+            return
+        
+        decision = payload.get("approved")
+        if decision:
+            rospy.loginfo("Plan approved. Executing...")
+            self.awaiting_approval = False
+            plan = list(self.pending_plan)
+            self.pending_plan = []
+            self.execute_actions(plan)
+        else:
+            rospy.loginfo("Plan rejected. Describe a new plan.")
+            self.awaiting_approval = False
+            self.pending_plan = []
+    
+    def _update_prompt_template(self):
+        """Store reference to current world model for prompt formatting."""
+        try:
+            rospy.loginfo("Prompt template updated with new world model")
+        except Exception as e:
+            rospy.logwarn(f"Failed to update prompt template: {e}")
+    
+    def _interpret_plan(self, plan):
+        """Convert programmatic plan to natural language using LLM like orchestrator."""
+        try:
+            if not plan:
+                return "No plan generated"
+            
+            # Check if we have OpenAI client for interpretation
+            if not hasattr(self, 'openai_client') or self.openai_client is None:
+                # Fallback to simple interpretation if no OpenAI
+                return f"Robot will execute {len(plan)} actions: {', '.join(plan[:3])}{'...' if len(plan) > 3 else ''}"
+            
+            # Format plan as string
+            plan_str = "\n".join([f"{i+1}. {action}" for i, action in enumerate(plan)])
+            
+            # Plan interpretation prompt (same as orchestrator)
+            PLAN_INTERPRETATION_PROMPT = """You are a robot plan interpreter. Convert a programmatic robot plan into natural language.
+
+COORDINATE SYSTEM:
+- X positive = forward movement
+- Y positive = left movement  
+- Y negative = right movement
+- Yaw positive = rotation left
+- Yaw negative = rotation right
+
+ROBOT ACTIONS:
+- stand_up: Robot stands up
+- sit_down: Robot sits down  
+- start_moving, x=X, y=Y, yaw=YAW: Robot moves X meters forward, Y meters left (if Y>0) or right (if Y<0), rotates YAW radians left (if YAW>0) or right (if YAW<0)
+- start_automated_grasp, object_type="OBJECT": Robot grasps the OBJECT
+- start_move_arm_pose, x=X, y=Y, z=Z: Robot moves arm to position (X,Y,Z)
+- start_arm_command, command_type=COMMAND: Robot executes arm command (open/close/stow/carry)
+
+PLAN: {plan}
+
+INSTRUCTIONS:
+1. Convert the plan into 2-3 clear sentences
+2. Use correct directional language: "left" for Y>0, "right" for Y<0, "forward" for X>0, "backward" for X<0
+3. For rotations: "left" for positive yaw, "right" for negative yaw
+4. Group similar movements together (e.g., "moves forward 2 meters, then right 1 meter")
+5. For repeated movements, say "repeats these movements"
+6. Keep it concise and user-friendly
+7. Focus on the main actions, not technical details
+
+NATURAL LANGUAGE DESCRIPTION:"""
+            
+            # Use small model for interpretation (same as orchestrator)
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",  # Small, fast model
+                messages=[
+                    {"role": "system", "content": "You are a helpful robot plan interpreter."},
+                    {"role": "user", "content": PLAN_INTERPRETATION_PROMPT.format(plan=plan_str)}
+                ],
+                max_tokens=150,  # Keep it short
+                temperature=0.3  # Consistent output
+            )
+            
+            interpretation = response.choices[0].message.content.strip()
+            rospy.loginfo(f"Plan interpretation: {interpretation}")
+            return interpretation
+            
+        except Exception as e:
+            rospy.logwarn(f"Plan interpretation failed: {e}")
+            return f"Robot will execute {len(plan)} actions: {', '.join(plan[:3])}{'...' if len(plan) > 3 else ''}"
+    
     def publish_position_update(self):
         """Publish current robot position to GUI"""
         try:
@@ -621,9 +825,24 @@ class NaturalLanguageControl:
 
 def main():
     # Configuration: True=speech, False=terminal
-    USE_SPEECH = False
+    USE_SPEECH = True  # Changed to True to listen to GUI commands
     
     try:
+        # Check if we're running in launch mode (with ROS parameters)
+        try:
+            rospy.init_node('nl_control', anonymous=True)
+            world_id = rospy.get_param('~world_id', None)
+            if world_id:
+                # Running in launch mode - use ROS parameter
+                print(f"Launch mode: Using world {world_id}")
+                controller = NaturalLanguageControl(use_speech=USE_SPEECH, world_id=world_id)
+                controller.run()
+                return
+        except:
+            # Not running in ROS mode, continue with interactive selection
+            pass
+        
+        # Interactive world selection mode
         # Create world manager for selection without full controller
         wm = WorldManager()
         

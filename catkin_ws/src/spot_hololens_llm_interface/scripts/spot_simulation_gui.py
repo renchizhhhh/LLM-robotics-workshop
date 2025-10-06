@@ -246,6 +246,7 @@ class SpotSimulationGUI:
         self.pub_user_speech = rospy.Publisher('/hl/user_speech', String, queue_size=1)
         self.pub_approval = rospy.Publisher('/hl/approval', String, queue_size=1)
         self.pub_stop = rospy.Publisher('/hl/stop', Empty, queue_size=1)
+        self.pub_world_change = rospy.Publisher('/gui/world_change', String, queue_size=1)
         
         # Threading for GUI updates
         self.update_lock = threading.Lock()
@@ -330,23 +331,13 @@ class SpotSimulationGUI:
             canvas_x, canvas_y = self.vision_to_canvas(x, y)
             
             # Determine waypoint type and styling
-            if waypoint_data.get("pick_yaw") is not None and waypoint_data.get("drop_yaw") is not None:
-                # Both pickup and dropoff
+            if waypoint_data.get("pick_yaw") is not None:
+                # Pickup waypoint - show category name
                 color = "#ffa657"
                 outline = "#ff7b72"
-                label = "PICK/DROP"
-            elif waypoint_data.get("pick_yaw") is not None:
-                # Pickup only
-                color = "#ffa657"
-                outline = "#ff7b72"
-                label = "PICKUP"
-            elif waypoint_data.get("drop_yaw") is not None:
-                # Dropoff only
-                color = "#00d4aa"
-                outline = "#39d353"
-                label = "DROPOFF"
+                label = waypoint_name.upper()
             else:
-                # General waypoint
+                # General waypoint (should not exist anymore since we removed dropoff waypoints)
                 color = "#58a6ff"
                 outline = "#39d353"
                 label = waypoint_name.upper()
@@ -356,24 +347,28 @@ class SpotSimulationGUI:
                                        fill=color, outline=outline, width=3)
             self.canvas.create_text(canvas_x, canvas_y-40, text=label, font=("Arial", 12, "bold"), fill=color)
             
-            # Draw orientation indicator if specified
+            # Draw orientation indicator if specified (accounting for canvas rotation)
             if waypoint_data.get("pick_yaw") is not None:
                 yaw = waypoint_data["pick_yaw"]
-                arrow_length = 20
-                arrow_x = canvas_x + arrow_length * math.cos(yaw)
-                arrow_y = canvas_y - arrow_length * math.sin(yaw)
-                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#ffffff", width=2, arrow=tk.LAST)
+                arrow_length = 30
+                # Transform yaw for canvas coordinates: account for 90° CCW rotation (X->Y, Y->-X)
+                # Canvas yaw = vision yaw - 90°, then negate Y for screen coords
+                canvas_yaw = yaw - math.pi/2
+                arrow_x = canvas_x + arrow_length * math.cos(canvas_yaw)
+                arrow_y = canvas_y - arrow_length * math.sin(canvas_yaw)  # Negative for screen coords
+                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#ffffff", width=3, arrow=tk.LAST)
         
-        # Draw zones dynamically
-        for zone_name, zone_data in self.zones.items():
+        # Draw zones dynamically (these are dropoff points) with collision avoidance
+        adjusted_zones = self._adjust_zones_for_collisions()
+        for zone_name, zone_data in adjusted_zones.items():
             centroid = zone_data["centroid"]
             x, y = centroid["x"], centroid["y"]
             canvas_x, canvas_y = self.vision_to_canvas(x, y)
             
-            # Draw zone as a larger circle
+            # Draw zone as a larger circle with dropoff styling
             self.canvas.create_oval(canvas_x-40, canvas_y-40, canvas_x+40, canvas_y+40,
-                                   fill="#2d2d2d", outline="#58a6ff", width=2, stipple="gray25")
-            self.canvas.create_text(canvas_x, canvas_y, text=zone_name.upper(), font=("Arial", 10, "bold"), fill="#58a6ff")
+                                   fill="#2d2d2d", outline="#00d4aa", width=3, stipple="gray25")
+            self.canvas.create_text(canvas_x, canvas_y, text=zone_name.upper(), font=("Arial", 10, "bold"), fill="#00d4aa")
             
             # Draw orientation hint if available
             if zone_data.get("yaw_hint") is not None:
@@ -381,7 +376,7 @@ class SpotSimulationGUI:
                 arrow_length = 30
                 arrow_x = canvas_x + arrow_length * math.cos(yaw)
                 arrow_y = canvas_y - arrow_length * math.sin(yaw)
-                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#58a6ff", width=3, arrow=tk.LAST)
+                self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#00d4aa", width=3, arrow=tk.LAST)
         
         # Draw objects with better visibility
         for obj_name, obj_data in self.objects.items():
@@ -507,52 +502,102 @@ class SpotSimulationGUI:
                                   fill="#f85149", outline="#f0f6fc", width=1, tags="robot")
     
     def _create_dynamic_objects(self):
-        """Create dynamic objects based on world configuration."""
+        """Create dynamic objects based on world configuration without generic placeholders."""
         objects = {}
         
-        # Create objects near waypoints that have pick_yaw (pickup locations)
         waypoints = self.world_config.get("waypoints", {})
         colors = ["#f85149", "#39d353", "#58a6ff", "#ffa657", "#ff7b72", "#00d4aa"]
-        # Only drink objects for pickup locations
-        object_names = ["water_bottle", "soda_can", "juice_box", "coffee_cup", "energy_drink", "sports_drink"]
         
         color_idx = 0
-        name_idx = 0
         
         for waypoint_name, waypoint_data in waypoints.items():
-            if waypoint_data.get("pick_yaw") is not None:
-                # This is a pickup location, add objects nearby
-                x = waypoint_data["x"]
-                y = waypoint_data["y"]
+            if waypoint_data.get("pick_yaw") is None:
+                continue
+            x = waypoint_data["x"]
+            y = waypoint_data["y"]
+            
+            # Get specific object names based on waypoint category (PICKUP_* keys)
+            object_names = self._get_objects_for_category(waypoint_name)
+            
+            # Only place real items; if none are defined for this category, skip
+            for i in range(min(3, len(object_names))):
+                offset_x = (i - 1) * 0.35
+                offset_y = ((i % 2) * 0.3) - 0.15
+                obj_name = object_names[i]
+                obj_color = colors[color_idx % len(colors)]
                 
-                # Add 2-3 objects near this pickup location
-                for i in range(2):
-                    offset_x = (i - 0.5) * 0.4  # Spread objects around the waypoint
-                    offset_y = (i % 2) * 0.3
-                    
-                    obj_name = object_names[name_idx % len(object_names)]
-                    obj_color = colors[color_idx % len(colors)]
-                    
-                    objects[obj_name] = {
-                        "x": x + offset_x,
-                        "y": y + offset_y,
-                        "present": True,
-                        "color": obj_color,
-                        "waypoint": waypoint_name
-                    }
-                    
-                    color_idx += 1
-                    name_idx += 1
-        
-        # If no pickup waypoints found, create default drink objects
-        if not objects:
-            objects = {
-                "water_bottle": {"x": 2.0, "y": -1.0, "present": True, "color": "#f85149", "waypoint": "default"},
-                "soda_can": {"x": 2.2, "y": -0.8, "present": True, "color": "#39d353", "waypoint": "default"},
-                "juice_box": {"x": 1.8, "y": -1.2, "present": True, "color": "#58a6ff", "waypoint": "default"}
-            }
+                objects[obj_name] = {
+                    "x": x + offset_x,
+                    "y": y + offset_y,
+                    "present": True,
+                    "color": obj_color,
+                    "waypoint": waypoint_name
+                }
+                color_idx += 1
         
         return objects
+    
+    def _get_objects_for_category(self, category_name):
+        """Get specific object names for each PICKUP_* category. Never return generic items."""
+        name = str(category_name or "").upper()
+        objects_by_category = {
+            "PICKUP_BEVERAGES": ["water_bottle", "soda_can", "juice_box"],
+            "PICKUP_PRODUCE": ["apple", "banana", "orange"],
+            "PICKUP_DAIRY": ["milk_carton", "cheddar_block", "yogurt_cup"],
+            "PICKUP_INCOMING": ["pallet", "shipping_box", "barcode_label"],
+            "PICKUP_ELECTRONICS": ["circuit_board", "power_supply", "hdmi_cable"],
+            "PICKUP_TEXTILES": ["fabric_roll", "cotton_bale", "yarn_spool"],
+            "PICKUP_TOOLS": ["wrench", "screwdriver", "pliers"],
+            "PICKUP_STATIONERY": ["pen", "pencil", "marker"],
+            "PICKUP_OFFICE_SUPPLIES": ["stapler", "paper_clips", "folder"],
+            "PICKUP_COMPUTERS": ["laptop", "keyboard", "mouse"],
+            "PICKUP_COFFEE": ["coffee_cup", "espresso_pod", "sugar_packet"],
+            "PICKUP_MEDICATIONS": ["pill_bottle", "syringe", "bandage"],
+            "PICKUP_PPE": ["gloves_box", "face_mask", "sanitizer_bottle"],
+            "PICKUP_EMERGENCY_SUPPLIES": ["first_aid_kit", "defibrillator", "oxygen_tank"],
+            "PICKUP_INGREDIENTS": ["flour_bag", "tomatoes", "spices_jar"],
+            "PICKUP_KNIVES": ["chef_knife", "paring_knife", "honing_rod"],
+            "PICKUP_UTENSILS": ["fork", "spoon", "tongs"],
+            "PICKUP_GLASSWARE": ["test_tube", "beaker", "vial"],
+            "PICKUP_MICROSCOPES": ["microscope", "glass_slide", "cover_slip"],
+            "PICKUP_SAMPLES": ["blood_sample", "tissue_sample", "culture_dish"],
+            "PICKUP_ELECTRONICS_PHONES": ["smartphone", "charger", "earbuds"],
+            "PICKUP_APPAREL_TOPS": ["shirt", "t_shirt", "jacket"],
+            "PICKUP_TOYS": ["toy_car", "puzzle_box", "plush_bear"],
+            "PICKUP_SECURITY_ITEMS": ["security_bin", "tray", "belt_bucket"],
+            "PICKUP_TICKETING": ["boarding_pass", "luggage_tag", "passport"],
+            "PICKUP_MAPS_INFO": ["terminal_map", "brochure", "guide"],
+            "PICKUP_HANDTOOLS": ["hammer", "tape_measure", "chisel"],
+            "PICKUP_LUMBER": ["wood_plank", "timber_beam", "plywood_sheet"],
+            "PICKUP_SAFETY_HELMETS": ["hard_hat", "safety_vest", "ear_protectors"],
+        }
+        return list(objects_by_category.get(name, []))
+
+    def _adjust_zones_for_collisions(self, min_distance=1.2):
+        """Return a copy of zones with centroids nudged to avoid overlap with pickup waypoints."""
+        import math as _math
+        zones = self.world_config.get("zones", {})
+        waypoints = self.world_config.get("waypoints", {})
+        adjusted = {}
+        for zn, zd in zones.items():
+            c = dict(zd.get("centroid", {}))
+            zx, zy = float(c.get("x", 0.0)), float(c.get("y", 0.0))
+            # push away if close to any pickup waypoint
+            for wp_name, wp in waypoints.items():
+                if wp.get("pick_yaw") is None:
+                    continue
+                dx = zx - float(wp.get("x", 0.0))
+                dy = zy - float(wp.get("y", 0.0))
+                dist = (_math.hypot(dx, dy) or 1e-6)
+                if dist < min_distance:
+                    # Nudge outward along the vector from waypoint to zone
+                    scale = (min_distance - dist) + 0.0
+                    zx += (dx / dist) * scale
+                    zy += (dy / dist) * scale
+            new_zone = dict(zd)
+            new_zone["centroid"] = {"x": zx, "y": zy, "z": zd.get("centroid", {}).get("z", 0.0)}
+            adjusted[zn] = new_zone
+        return adjusted
     
     def show_world_selection(self):
         """Show world selection dialog."""
@@ -651,6 +696,9 @@ class SpotSimulationGUI:
             # Redraw the world
             self.draw_world()
             self.draw_robot()
+            
+            # Notify NL_Control about world change
+            self.pub_world_change.publish(String(data=world_id))
             
             rospy.loginfo(f"Loaded world: {self.world_name} - {self.world_description}")
     
@@ -991,9 +1039,7 @@ class SpotSimulationGUI:
         # Clear text entry
         self.command_entry.delete(0, tk.END)
         
-        # Enable approve/decline buttons
-        self.approve_button.config(state='normal')
-        self.decline_button.config(state='normal')
+        # Don't enable buttons here - wait for interpretation to enable them
     
     def _on_refresh(self):
         """Clear text entry"""
@@ -1018,7 +1064,7 @@ class SpotSimulationGUI:
         self.decline_button.config(state='disabled')
     
     def _on_interpretation(self, msg):
-        """Handle natural language interpretation from orchestrator"""
+        """Handle natural language interpretation from orchestrator or nl_control"""
         try:
             interpretation = msg.data.strip()
             if interpretation:
@@ -1030,6 +1076,10 @@ class SpotSimulationGUI:
                 # Add only the interpretation, no coordinate system info
                 self.feedback_text.insert(tk.END, interpretation)
                 self.feedback_text.config(state=tk.DISABLED)
+                
+                # Enable approve/decline buttons when interpretation is received
+                self.approve_button.config(state='normal')
+                self.decline_button.config(state='normal')
         except Exception as e:
             rospy.logwarn(f"Failed to parse interpretation: {e}")
     

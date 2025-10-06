@@ -20,17 +20,23 @@ class WorldManager:
                 "description": "Basic two-location scenario for testing",
                 "config": {
                     "waypoints": {
-                        "PickupOfDrinks": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "DropOffArea": {"x": 2.0, "y": 0.5, "z": 0.0, "pick_yaw": None, "drop_yaw": 1.57}
+                        "PICKUP_BEVERAGES": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
-                    "zones": {},
+                    "zones": {
+                        "DeliveryArea": {
+                            "centroid": {"x": 2.0, "y": 0.5, "z": 0.0},
+                            "yaw_hint": 1.57,
+                            "tags": ["delivery", "drop-off", "destination"]
+                        }
+                    },
                     "synonyms": {
-                        "pickup of drinks": "PickupOfDrinks",
-                        "drink pickup": "PickupOfDrinks",
-                        "pickup location": "PickupOfDrinks",
-                        "drop-off location": "DropOffArea",
-                        "drop off location": "DropOffArea",
-                        "delivery area": "DropOffArea"
+                        "beverages": "PICKUP_BEVERAGES",
+                        "drinks": "PICKUP_BEVERAGES",
+                        "drink station": "PICKUP_BEVERAGES",
+                        "beverage station": "PICKUP_BEVERAGES",
+                        "delivery area": "DeliveryArea",
+                        "drop-off area": "DeliveryArea",
+                        "destination": "DeliveryArea"
                     }
                 }
             },
@@ -39,37 +45,39 @@ class WorldManager:
                 "description": "Supermarket environment with produce, dairy, and checkout",
                 "config": {
                     "waypoints": {
-                        "PickupOfDrinks": {"x": 3.5, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "CheckoutCounter": {"x": 1.0, "y": 2.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 1.57},
-                        "PickupOfDrinks2": {"x": -2.0, "y": 1.5, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None}
+                        "PICKUP_BEVERAGES": {"x": 3.5, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_PRODUCE": {"x": 1.8, "y": 2.2, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
+                        "PICKUP_DAIRY": {"x": -1.5, "y": 1.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None}
                     },
                     "zones": {
-                        "VegZoneA": {
-                            "centroid": {"x": 1.8, "y": 2.2, "z": 0.0},
+                        "Checkout": {
+                            "centroid": {"x": 1.0, "y": 2.0, "z": 0.0},
                             "yaw_hint": 1.57,
-                            "tags": ["vegetables", "produce", "fresh"]
-                        },
-                        "DairySection": {
-                            "centroid": {"x": -1.5, "y": 1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
-                            "tags": ["dairy", "milk", "cheese", "yogurt"]
+                            "tags": ["checkout", "cashier", "payment"]
                         }
                     },
                     "synonyms": {
-                        "pickup of drinks": "PickupOfDrinks",
-                        "drink pickup": "PickupOfDrinks",
-                        "pickup location": "PickupOfDrinks",
-                        "pickup of drinks 2": "PickupOfDrinks2",
-                        "drink pickup 2": "PickupOfDrinks2",
-                        "second pickup": "PickupOfDrinks2",
-                        "where the vegetables are": "VegZoneA",
-                        "vegetable area": "VegZoneA",
-                        "veggies": "VegZoneA",
-                        "produce section": "VegZoneA",
-                        "checkout": "CheckoutCounter",
-                        "cashier": "CheckoutCounter",
-                        "dairy section": "DairySection",
-                        "milk area": "DairySection"
+                        "drinks": "PICKUP_BEVERAGES",
+                        "beverages": "PICKUP_BEVERAGES",
+                        "soda": "PICKUP_BEVERAGES",
+                        "water bottle": "PICKUP_BEVERAGES",
+                        "drink aisle": "PICKUP_BEVERAGES",
+
+                        "fruits": "PICKUP_PRODUCE",
+                        "produce": "PICKUP_PRODUCE",
+                        "apples": "PICKUP_PRODUCE",
+                        "bananas": "PICKUP_PRODUCE",
+                        "oranges": "PICKUP_PRODUCE",
+
+                        "dairy": "PICKUP_DAIRY",
+                        "milk": "PICKUP_DAIRY",
+                        "cheese": "PICKUP_DAIRY",
+                        "yogurt": "PICKUP_DAIRY",
+                        "butter": "PICKUP_DAIRY",
+
+                        "checkout": "Checkout",
+                        "cashier": "Checkout",
+                        "payment": "Checkout"
                     }
                 }
             },
@@ -78,13 +86,17 @@ class WorldManager:
                 "description": "Industrial warehouse with loading dock and storage areas",
                 "config": {
                     "waypoints": {
-                        "LoadingDock": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "StorageA": {"x": 5.0, "y": 2.0, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
-                        "StorageB": {"x": 5.0, "y": -2.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None},
-                        "ShippingArea": {"x": -3.0, "y": 0.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0},
-                        "QualityControl": {"x": 2.0, "y": -4.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                        "PICKUP_INCOMING": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_ELECTRONICS": {"x": 5.0, "y": 2.0, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
+                        "PICKUP_TEXTILES": {"x": 5.0, "y": -2.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None},
+                        "PICKUP_TOOLS": {"x": 2.0, "y": -4.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
+                        "ShippingArea": {
+                            "centroid": {"x": -3.0, "y": 0.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["shipping", "outbound", "dispatch"]
+                        },
                         "HighValueZone": {
                             "centroid": {"x": 3.0, "y": 0.0, "z": 0.0},
                             "yaw_hint": 0.0,
@@ -92,16 +104,20 @@ class WorldManager:
                         }
                     },
                     "synonyms": {
-                        "loading dock": "LoadingDock",
-                        "dock": "LoadingDock",
-                        "storage area a": "StorageA",
-                        "storage a": "StorageA",
-                        "storage area b": "StorageB",
-                        "storage b": "StorageB",
-                        "shipping": "ShippingArea",
+                        "incoming goods": "PICKUP_INCOMING",
+                        "loading dock": "PICKUP_INCOMING",
+                        "dock": "PICKUP_INCOMING",
+                        "electronics": "PICKUP_ELECTRONICS",
+                        "electronic items": "PICKUP_ELECTRONICS",
+                        "gadgets": "PICKUP_ELECTRONICS",
+                        "textiles": "PICKUP_TEXTILES",
+                        "fabric": "PICKUP_TEXTILES",
+                        "clothing": "PICKUP_TEXTILES",
+                        "tools": "PICKUP_TOOLS",
+                        "hardware": "PICKUP_TOOLS",
                         "shipping area": "ShippingArea",
-                        "quality control": "QualityControl",
-                        "qc": "QualityControl",
+                        "shipping": "ShippingArea",
+                        "outbound": "ShippingArea",
                         "secure zone": "HighValueZone",
                         "valuable items": "HighValueZone"
                     }
@@ -112,32 +128,42 @@ class WorldManager:
                 "description": "Corporate office with reception, meeting rooms, and workstations",
                 "config": {
                     "waypoints": {
-                        "Reception": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "MeetingRoomA": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
-                        "MeetingRoomB": {"x": 3.0, "y": -2.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None},
-                        "WorkstationArea": {"x": -2.0, "y": 0.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0},
-                        "Kitchen": {"x": -4.0, "y": 3.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                        "PICKUP_STATIONERY": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_OFFICE_SUPPLIES": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
+                        "PICKUP_COMPUTERS": {"x": 3.0, "y": -2.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None},
+                        "PICKUP_COFFEE": {"x": -4.0, "y": 3.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
-                        "ExecutiveZone": {
+                        "Desks": {
+                            "centroid": {"x": -2.0, "y": 0.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["workstations", "desks", "employees"]
+                        },
+                        "BossOffice": {
                             "centroid": {"x": 1.0, "y": 1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["executive", "management", "private"]
                         }
                     },
                     "synonyms": {
-                        "reception": "Reception",
-                        "front desk": "Reception",
-                        "meeting room a": "MeetingRoomA",
-                        "conference room a": "MeetingRoomA",
-                        "meeting room b": "MeetingRoomB",
-                        "conference room b": "MeetingRoomB",
-                        "workstation area": "WorkstationArea",
-                        "desk area": "WorkstationArea",
-                        "kitchen": "Kitchen",
-                        "break room": "Kitchen",
-                        "executive area": "ExecutiveZone",
-                        "management zone": "ExecutiveZone"
+                        "pens": "PICKUP_STATIONERY",
+                        "pencils": "PICKUP_STATIONERY",
+                        "markers": "PICKUP_STATIONERY",
+                        "writing": "PICKUP_STATIONERY",
+                        "supplies": "PICKUP_OFFICE_SUPPLIES",
+                        "office supplies": "PICKUP_OFFICE_SUPPLIES",
+                        "staplers": "PICKUP_OFFICE_SUPPLIES",
+                        "paperclips": "PICKUP_OFFICE_SUPPLIES",
+                        "computers": "PICKUP_COMPUTERS",
+                        "laptops": "PICKUP_COMPUTERS",
+                        "tech": "PICKUP_COMPUTERS",
+                        "coffee": "PICKUP_COFFEE",
+                        "espresso": "PICKUP_COFFEE",
+                        "cappuccino": "PICKUP_COFFEE",
+                        "desks": "Desks",
+                        "workstations": "Desks",
+                        "boss office": "BossOffice",
+                        "executive": "BossOffice"
                     }
                 }
             },
@@ -146,42 +172,44 @@ class WorldManager:
                 "description": "Medical facility with patient rooms, pharmacy, and emergency areas",
                 "config": {
                     "waypoints": {
-                        "PickupOfDrinks": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "PickupOfDrinks2": {"x": 4.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "EmergencyRoom": {"x": -3.0, "y": 2.0, "z": 0.0, "pick_yaw": 1.57, "drop_yaw": None},
-                        "SurgeryPrep": {"x": 2.0, "y": -3.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0}
+                        "PICKUP_MEDICATIONS": {"x": 2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_PPE": {"x": 4.0, "y": 1.0, "z": 0.0, "pick_yaw": -1.57, "drop_yaw": None},
+                        "PICKUP_EMERGENCY_SUPPLIES": {"x": -3.0, "y": 2.0, "z": 0.0, "pick_yaw": 3.14, "drop_yaw": None}
                     },
                     "zones": {
-                        "PatientWard": {
+                        "Patients": {
                             "centroid": {"x": 1.0, "y": 1.5, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["patients", "rooms", "beds"]
                         },
-                        "CriticalCare": {
+                        "ICU": {
                             "centroid": {"x": -1.0, "y": 0.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["critical", "icu", "intensive"]
+                        },
+                        "Surgery": {
+                            "centroid": {"x": 2.0, "y": -3.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["surgery", "prep", "operating"]
                         }
                     },
                     "synonyms": {
-                        "pickup of drinks": "PickupOfDrinks",
-                        "drink pickup": "PickupOfDrinks",
-                        "pickup location": "PickupOfDrinks",
-                        "pickup of drinks 2": "PickupOfDrinks2",
-                        "drink pickup 2": "PickupOfDrinks2",
-                        "second pickup": "PickupOfDrinks2",
-                        "coffee pickup": "PickupOfDrinks",
-                        "coffee location": "PickupOfDrinks",
-                        "drink station": "PickupOfDrinks",
-                        "beverage pickup": "PickupOfDrinks",
-                        "emergency room": "EmergencyRoom",
-                        "er": "EmergencyRoom",
-                        "surgery prep": "SurgeryPrep",
-                        "prep room": "SurgeryPrep",
-                        "patient ward": "PatientWard",
-                        "ward": "PatientWard",
-                        "critical care": "CriticalCare",
-                        "icu": "CriticalCare"
+                        "medicine": "PICKUP_MEDICATIONS",
+                        "pills": "PICKUP_MEDICATIONS",
+                        "medications": "PICKUP_MEDICATIONS",
+                        "pharmacy": "PICKUP_MEDICATIONS",
+                        "gloves": "PICKUP_PPE",
+                        "masks": "PICKUP_PPE",
+                        "ppe": "PICKUP_PPE",
+                        "emergency kit": "PICKUP_EMERGENCY_SUPPLIES",
+                        "first aid": "PICKUP_EMERGENCY_SUPPLIES",
+                        "defibrillator": "PICKUP_EMERGENCY_SUPPLIES",
+                        "patients": "Patients",
+                        "ward": "Patients",
+                        "icu": "ICU",
+                        "critical care": "ICU",
+                        "surgery": "Surgery",
+                        "operating room": "Surgery"
                     }
                 }
             },
@@ -190,36 +218,43 @@ class WorldManager:
                 "description": "Commercial kitchen with prep stations, cooking areas, and service",
                 "config": {
                     "waypoints": {
-                        "PrepStation": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "CookingArea": {"x": 3.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "ServiceWindow": {"x": 0.0, "y": 2.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 1.57},
-                        "StorageRoom": {"x": -2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                        "PICKUP_INGREDIENTS": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_KNIVES": {"x": 3.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_UTENSILS": {"x": -2.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
-                        "ColdStorage": {
+                        "Counter": {
+                            "centroid": {"x": 0.0, "y": 2.0, "z": 0.0},
+                            "yaw_hint": 1.57,
+                            "tags": ["service", "pass", "orders"]
+                        },
+                        "Fridge": {
                             "centroid": {"x": -1.0, "y": 1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["cold", "refrigerated", "fresh"]
                         },
-                        "HotLine": {
+                        "Stove": {
                             "centroid": {"x": 2.0, "y": 1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["hot", "cooking", "grill"]
                         }
                     },
                     "synonyms": {
-                        "prep station": "PrepStation",
-                        "prep area": "PrepStation",
-                        "cooking area": "CookingArea",
-                        "cooking station": "CookingArea",
-                        "service window": "ServiceWindow",
-                        "pass": "ServiceWindow",
-                        "storage room": "StorageRoom",
-                        "pantry": "StorageRoom",
-                        "cold storage": "ColdStorage",
-                        "refrigerator": "ColdStorage",
-                        "hot line": "HotLine",
-                        "grill area": "HotLine"
+                        "ingredients": "PICKUP_INGREDIENTS",
+                        "vegetables": "PICKUP_INGREDIENTS",
+                        "meat": "PICKUP_INGREDIENTS",
+                        "sauce": "PICKUP_INGREDIENTS",
+                        "knives": "PICKUP_KNIVES",
+                        "chef knife": "PICKUP_KNIVES",
+                        "forks": "PICKUP_UTENSILS",
+                        "utensils": "PICKUP_UTENSILS",
+                        "cutlery": "PICKUP_UTENSILS",
+                        "counter": "Counter",
+                        "service": "Counter",
+                        "fridge": "Fridge",
+                        "refrigerator": "Fridge",
+                        "stove": "Stove",
+                        "cooking": "Stove"
                     }
                 }
             },
@@ -228,36 +263,41 @@ class WorldManager:
                 "description": "Research lab with equipment stations and specimen areas",
                 "config": {
                     "waypoints": {
-                        "MainBench": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "MicroscopeStation": {"x": 2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "SpecimenStorage": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "WasteDisposal": {"x": 0.0, "y": -2.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0}
+                        "PICKUP_GLASSWARE": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_MICROSCOPES": {"x": 2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_SAMPLES": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
+                        "Trash": {
+                            "centroid": {"x": 0.0, "y": -2.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["waste", "disposal", "hazardous"]
+                        },
                         "CleanRoom": {
                             "centroid": {"x": 1.0, "y": 0.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["sterile", "clean", "contamination-free"]
                         },
-                        "HazardousArea": {
+                        "Chemicals": {
                             "centroid": {"x": -1.0, "y": 0.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["hazardous", "chemicals", "dangerous"]
                         }
                     },
                     "synonyms": {
-                        "main bench": "MainBench",
-                        "workbench": "MainBench",
-                        "microscope station": "MicroscopeStation",
-                        "microscope": "MicroscopeStation",
-                        "specimen storage": "SpecimenStorage",
-                        "sample storage": "SpecimenStorage",
-                        "waste disposal": "WasteDisposal",
-                        "waste area": "WasteDisposal",
+                        "test tubes": "PICKUP_GLASSWARE",
+                        "glass tubes": "PICKUP_GLASSWARE",
+                        "microscopes": "PICKUP_MICROSCOPES",
+                        "microscope": "PICKUP_MICROSCOPES",
+                        "samples": "PICKUP_SAMPLES",
+                        "specimens": "PICKUP_SAMPLES",
+                        "vials": "PICKUP_SAMPLES",
+                        "trash": "Trash",
+                        "waste": "Trash",
                         "clean room": "CleanRoom",
-                        "sterile area": "CleanRoom",
-                        "hazardous area": "HazardousArea",
-                        "chemical storage": "HazardousArea"
+                        "sterile": "CleanRoom",
+                        "chemicals": "Chemicals",
+                        "hazardous": "Chemicals"
                     }
                 }
             },
@@ -266,36 +306,42 @@ class WorldManager:
                 "description": "Department store with clothing, electronics, and customer service",
                 "config": {
                     "waypoints": {
-                        "CustomerService": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "ElectronicsSection": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "ClothingSection": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "FittingRooms": {"x": -3.0, "y": -1.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0}
+                        "PICKUP_ELECTRONICS_PHONES": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_APPAREL_TOPS": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_TOYS": {"x": 1.0, "y": -2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
-                        "KidsSection": {
-                            "centroid": {"x": 1.0, "y": -2.0, "z": 0.0},
+                        "Help": {
+                            "centroid": {"x": 1.0, "y": 1.0, "z": 0.0},
                             "yaw_hint": 0.0,
-                            "tags": ["children", "toys", "kids"]
+                            "tags": ["service", "help", "information"]
                         },
-                        "HomeGoods": {
+                        "Fitting": {
+                            "centroid": {"x": -3.0, "y": -1.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["fitting", "changing", "rooms"]
+                        },
+                        "Furniture": {
                             "centroid": {"x": 2.0, "y": -1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["home", "furniture", "decor"]
                         }
                     },
                     "synonyms": {
-                        "customer service": "CustomerService",
-                        "service desk": "CustomerService",
-                        "electronics section": "ElectronicsSection",
-                        "electronics": "ElectronicsSection",
-                        "clothing section": "ClothingSection",
-                        "apparel": "ClothingSection",
-                        "fitting rooms": "FittingRooms",
-                        "changing rooms": "FittingRooms",
-                        "kids section": "KidsSection",
-                        "children's area": "KidsSection",
-                        "home goods": "HomeGoods",
-                        "furniture section": "HomeGoods"
+                        "phones": "PICKUP_ELECTRONICS_PHONES",
+                        "smartphones": "PICKUP_ELECTRONICS_PHONES",
+                        "electronics": "PICKUP_ELECTRONICS_PHONES",
+                        "shirts": "PICKUP_APPAREL_TOPS",
+                        "t shirts": "PICKUP_APPAREL_TOPS",
+                        "clothing": "PICKUP_APPAREL_TOPS",
+                        "toys": "PICKUP_TOYS",
+                        "board games": "PICKUP_TOYS",
+                        "help": "Help",
+                        "service": "Help",
+                        "fitting": "Fitting",
+                        "changing": "Fitting",
+                        "furniture": "Furniture",
+                        "home": "Furniture"
                     }
                 }
             },
@@ -304,39 +350,48 @@ class WorldManager:
                 "description": "Airport with gates, security, and baggage areas",
                 "config": {
                     "waypoints": {
-                        "SecurityCheckpoint": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "GateA1": {"x": 4.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "GateA2": {"x": 4.0, "y": -1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "BaggageClaim": {"x": -3.0, "y": 0.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0},
-                        "InformationDesk": {"x": 1.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
+                        "PICKUP_SECURITY_ITEMS": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_TICKETING": {"x": 4.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_MAPS_INFO": {"x": 1.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
-                        "DutyFree": {
+                        "Gate": {
+                            "centroid": {"x": 4.0, "y": -1.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["gate", "boarding", "departure"]
+                        },
+                        "Baggage": {
+                            "centroid": {"x": -3.0, "y": 0.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["baggage", "arrival", "luggage"]
+                        },
+                        "Shopping": {
                             "centroid": {"x": 2.0, "y": 0.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["shopping", "duty-free", "luxury"]
                         },
-                        "FoodCourt": {
+                        "Food": {
                             "centroid": {"x": 0.0, "y": -2.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["food", "restaurants", "dining"]
                         }
                     },
                     "synonyms": {
-                        "security checkpoint": "SecurityCheckpoint",
-                        "security": "SecurityCheckpoint",
-                        "gate a1": "GateA1",
-                        "gate 1": "GateA1",
-                        "gate a2": "GateA2",
-                        "gate 2": "GateA2",
-                        "baggage claim": "BaggageClaim",
-                        "baggage": "BaggageClaim",
-                        "information desk": "InformationDesk",
-                        "info desk": "InformationDesk",
-                        "duty free": "DutyFree",
-                        "shopping area": "DutyFree",
-                        "food court": "FoodCourt",
-                        "restaurants": "FoodCourt"
+                        "security tray": "PICKUP_SECURITY_ITEMS",
+                        "bins": "PICKUP_SECURITY_ITEMS",
+                        "belt": "PICKUP_SECURITY_ITEMS",
+                        "tickets": "PICKUP_TICKETING",
+                        "boarding passes": "PICKUP_TICKETING",
+                        "map": "PICKUP_MAPS_INFO",
+                        "information map": "PICKUP_MAPS_INFO",
+                        "gate": "Gate",
+                        "boarding": "Gate",
+                        "baggage": "Baggage",
+                        "luggage": "Baggage",
+                        "shopping": "Shopping",
+                        "duty free": "Shopping",
+                        "food": "Food",
+                        "restaurants": "Food"
                     }
                 }
             },
@@ -345,36 +400,43 @@ class WorldManager:
                 "description": "Building site with materials, tools, and work areas",
                 "config": {
                     "waypoints": {
-                        "ToolShed": {"x": 0.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "MaterialStorage": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "WorkSite": {"x": 5.0, "y": 0.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
-                        "SafetyStation": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": None, "drop_yaw": 0.0}
+                        "PICKUP_HANDTOOLS": {"x": 1.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_LUMBER": {"x": 3.0, "y": 2.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None},
+                        "PICKUP_SAFETY_HELMETS": {"x": -2.0, "y": 1.0, "z": 0.0, "pick_yaw": 0.0, "drop_yaw": None}
                     },
                     "zones": {
-                        "HazardZone": {
+                        "Building": {
+                            "centroid": {"x": 5.0, "y": 0.0, "z": 0.0},
+                            "yaw_hint": 0.0,
+                            "tags": ["construction", "work", "building"]
+                        },
+                        "Danger": {
                             "centroid": {"x": 4.0, "y": 1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["dangerous", "hazardous", "caution"]
                         },
-                        "CleanArea": {
+                        "Safe": {
                             "centroid": {"x": 1.0, "y": -1.0, "z": 0.0},
                             "yaw_hint": 0.0,
                             "tags": ["safe", "clean", "finished"]
                         }
                     },
                     "synonyms": {
-                        "tool shed": "ToolShed",
-                        "tool storage": "ToolShed",
-                        "material storage": "MaterialStorage",
-                        "materials": "MaterialStorage",
-                        "work site": "WorkSite",
-                        "construction area": "WorkSite",
-                        "safety station": "SafetyStation",
-                        "safety area": "SafetyStation",
-                        "hazard zone": "HazardZone",
-                        "dangerous area": "HazardZone",
-                        "clean area": "CleanArea",
-                        "safe zone": "CleanArea"
+                        "hammer": "PICKUP_HANDTOOLS",
+                        "hand tools": "PICKUP_HANDTOOLS",
+                        "hammers": "PICKUP_HANDTOOLS",
+                        "wood": "PICKUP_LUMBER",
+                        "timber": "PICKUP_LUMBER",
+                        "lumber": "PICKUP_LUMBER",
+                        "helmet": "PICKUP_SAFETY_HELMETS",
+                        "hard hat": "PICKUP_SAFETY_HELMETS",
+                        "helmets": "PICKUP_SAFETY_HELMETS",
+                        "building": "Building",
+                        "construction": "Building",
+                        "danger": "Danger",
+                        "hazardous": "Danger",
+                        "safe": "Safe",
+                        "clean": "Safe"
                     }
                 }
             }
@@ -412,6 +474,22 @@ class WorldManager:
         except Exception as e:
             print(f"Error loading world from {filepath}: {e}")
             return None
+
+    @staticmethod
+    def resolve_pickup_area(item_query: str, config: dict):
+        """Return the PICKUP_* key for a natural-language item request."""
+        q = (item_query or "").strip().lower()
+        syn = config.get("synonyms", {}) or {}
+        # Exact hit
+        if q in syn:
+            return syn[q]
+        # Token-wise fallback
+        tokens = q.replace("-", " ").replace("_", " ").split()
+        for i in range(len(tokens), 0, -1):
+            k = " ".join(tokens[:i])
+            if k in syn:
+                return syn[k]
+        return None
 
 def main():
     """Demo the world manager."""

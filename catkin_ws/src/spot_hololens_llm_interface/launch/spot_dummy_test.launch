@@ -30,14 +30,19 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     </node>
     
     
-    <!-- orchestra in dummy mode -->
-    <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
+    <!-- orchestra in dummy mode - DISABLED to prevent conflicts with nl_control -->
+    <!-- <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
         <param name="dummy_mode" value="$(arg dummy_mode)"/>
         <param name="mode" value="HA"/>
-    </node>
+    </node> -->
 
     <!-- Spot Robot Simulation GUI for dummy mode -->
     <node if="$(arg dummy_mode)" name="spot_simulation_gui" pkg="spot_hololens_llm_interface" type="spot_simulation_gui.py" output="screen">
+    </node>
+
+    <!-- Natural Language Control for dummy mode -->
+    <node if="$(arg dummy_mode)" name="nl_control" pkg="spot_hololens_llm_interface" type="nl_control_gemini_no_world.py" output="screen">
+        <param name="world_id" value="1"/>
     </node>
 
     <!-- HoloLens Unity ROS TCP Endpoint -->
