@@ -8,7 +8,7 @@ import time
 from datetime import datetime
 
 import rospy
-from std_msgs.msg import String, Empty
+from std_msgs.msg import String, Empty, Empty
 
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'spot_hololens_llm_interface'))
@@ -103,11 +103,11 @@ Return only the action list, one action per line.
 
 Actions:"""
 
-HA_PROMPT = """You are a path planning system for a Boston Dynamics Spot robot.
+HA_PROMPT = """\
+You are a path planning system for a Boston Dynamics Spot robot.
 
 CURRENT STATE:
 - Robot state: {current_state}
-- Current position (vision frame): {current_position}
 
 WORLD LAYOUT (vision frame coordinates):
 - Pick-up location: (2.0, -1.0, 0.0) - Robot faces forward (yaw=0) when picking up
@@ -152,7 +152,8 @@ Return only the action list, one action per line.
 
 Task: {task}
 
-Actions:"""
+Return action list:
+"""
 
 def deg2rad(deg):
     try:
@@ -167,8 +168,11 @@ class ExperimentState(object):
     def __init__(self, mode='LA'):
         self.mode = mode  # 'LA' or 'HA'
         self.current_task = None
-        self.current_plan_id = 0
+        self.plan_counter = 0
         self.pending_plan = [] 
+        self.pending_plan_id = None
+        self.active_plan_id = None
+        self.stop_requested = False
         self.lock = threading.Lock()
         self.awaiting_approval = False
         # Position tracking for HA mode  
@@ -204,7 +208,7 @@ class ExperimentOrchestrator(object):
         rospy.loginfo("Orchestrator: Spot initialization sequence finished.")
 
         # Publishers to HoloLens
-        self.pub_interpretation = rospy.Publisher('/llm_int/interpretation', String, queue_size=10)
+        self.pub_plan = rospy.Publisher('/spot/plan', String, queue_size=10)
         self.pub_feedback = rospy.Publisher('/spot/execution_feedback', String, queue_size=20)
         # Publisher for GUI position updates
         self.pub_position = rospy.Publisher('/nl_control/robot_position', String, queue_size=1)
@@ -226,6 +230,11 @@ class ExperimentOrchestrator(object):
         self._exec_lock = threading.Lock()
 
         rospy.loginfo("Experiment Orchestrator started in %s mode.", self.state.mode)
+
+    def _next_plan_id(self):
+        with self.state.lock:
+            self.state.plan_counter += 1
+            return self.state.plan_counter
 
     # ---------- LLM ----------
     def _setup_llm(self):
@@ -472,6 +481,9 @@ NATURAL LANGUAGE DESCRIPTION:"""
             # self.state.num_interventions += 1
             self.state.awaiting_approval = False
             self.state.pending_plan = []
+            self.state.pending_plan_id = None
+            self.state.active_plan_id = None
+            self.state.stop_requested = False
         self._publish_feedback(f"[mode] Switched to {val}.")
 
     # ---------- HoloLens I/O ----------
@@ -515,7 +527,6 @@ NATURAL LANGUAGE DESCRIPTION:"""
 
     # Handle approval/rejection of HA plan
     def _on_approval(self, msg):
-       
         try:
             payload = json.loads(msg.data)
         except Exception as e:
@@ -523,20 +534,33 @@ NATURAL LANGUAGE DESCRIPTION:"""
             return
         with self.state.lock:
             awaiting = self.state.awaiting_approval
+            pending_plan_id = self.state.pending_plan_id
+            pending_plan = list(self.state.pending_plan)
         if not awaiting:
             rospy.logwarn("Plan not awaiting approval, ignoring /hl/approval message.")
             return
         plan_id = payload.get("plan_id")
         decision = payload.get("approved")
-        # TODO: verify plan_id matches current_plan_id?
-
+        # plan_id helps match approvals to a specific pending plan
+        if plan_id is not None:
+            try:
+                plan_id = int(plan_id)
+            except (TypeError, ValueError):
+                rospy.logwarn(f"Invalid plan_id '{plan_id}' in approval message; falling back to pending plan id {pending_plan_id}.")
+                plan_id = pending_plan_id
+        if plan_id is None:
+            plan_id = pending_plan_id
+        if pending_plan_id is not None and plan_id != pending_plan_id:
+            rospy.logwarn(f"Approval plan_id {plan_id} does not match pending plan {pending_plan_id}; ignoring message.")
+            return
         if decision:
             self._publish_feedback(f"[approval] Plan {plan_id} approved. Executing plan...")
             with self.state.lock:
-                plan = list(self.state.pending_plan)
+                self.state.pending_plan = []
+                self.state.pending_plan_id = None
                 self.state.awaiting_approval = False
                 # self.state.num_interventions += 1
-            self._execute_actions(plan, label="HA plan")
+            self._execute_actions(pending_plan, label=f"HA plan {plan_id}", plan_id=plan_id)
             # End trial on successful plan execution
             # summary = self.state.complete_trial(outcome='success')
             # if summary:
@@ -544,9 +568,24 @@ NATURAL LANGUAGE DESCRIPTION:"""
         else:
             with self.state.lock:
                 self.state.pending_plan = []
+                self.state.pending_plan_id = None
                 self.state.awaiting_approval = False
                 # self.state.num_interventions += 1
             self._publish_feedback("[approval] Rejected. Describe a new plan.")
+
+    def _on_stop(self, _msg):
+        with self.state.lock:
+            already_requested = self.state.stop_requested
+            had_pending = self.state.awaiting_approval
+            self.state.stop_requested = True
+            self.state.awaiting_approval = False
+            self.state.pending_plan = []
+            self.state.pending_plan_id = None
+        rospy.loginfo("Orchestrator: stop requested via /hl/stop")
+        if already_requested:
+            self._publish_feedback("[stop] Stop already active; waiting for current step to finish.")
+        else:
+            self._publish_feedback("[stop] Stop requested; halting after current action completes.")
 
 
     # ---------- LA / HA flows ----------
@@ -555,7 +594,7 @@ NATURAL LANGUAGE DESCRIPTION:"""
         actions = self._parse_command_to_actions(utterance, mode='LA')
         
         if not actions:
-            self._publish_interpretation(f"[LA] Could not parse: '{utterance}'. Try a simple command.")
+            self._publish_feedback(f"[LA] Could not parse: '{utterance}'. Try a simple command.")
             return
 
         # Generate natural language interpretation for LA mode too
@@ -569,7 +608,7 @@ NATURAL LANGUAGE DESCRIPTION:"""
         }
         self._publish_interpretation(json.dumps(payload))
         rospy.loginfo(f"Orchestrator: LA mode: LLM returned action: {actions}")
-        self._execute_actions(actions, label="LA command")
+        self._execute_actions(actions, label=f"LA command {plan_id}", plan_id=plan_id)
 
     def _handle_ha(self, utterance):
         """High Autonomy: generate a plan, show it, and wait for approval to execute."""
@@ -593,20 +632,31 @@ NATURAL LANGUAGE DESCRIPTION:"""
         self._publish_interpretation(plan_text)
         recorder.publish_event('start_user_confirmation')
         with self.state.lock:
-            self.state.pending_plan = actions
+            self.state.pending_plan = list(actions)
+            self.state.pending_plan_id = plan_id
             self.state.awaiting_approval = True
 
     # ---------- Execution ----------
 
-    def _execute_actions(self, actions, label="plan"):
+    def _execute_actions(self, actions, label="plan", plan_id=None):
         if not actions:
             return False
-        
+        if plan_id is None:
+            plan_id = self._next_plan_id()
+
         ok_all = True
+        stopped = False
+        steps_completed = 0
         # if self.dummy_mode:
         #     return ok_all
-        
+
         with self._exec_lock:
+            with self.state.lock:
+                if self.state.stop_requested:
+                    self._publish_feedback(f"[stop] Stop active; skipping {label}.")
+                    return False
+                self.state.active_plan_id = plan_id
+
             self._publish_feedback(f"[exec] Starting {label} ({len(actions)} step(s))")
             for i, action in enumerate(actions, 1):
                 # Check for stop signal before each action
@@ -727,14 +777,27 @@ NATURAL LANGUAGE DESCRIPTION:"""
                     self._publish_feedback(f"[exec] ✗ Failed '{action}': {e}")
                     rospy.logerr("Action failed '%s': %s", action, str(e))
                     break
+                with self.state.lock:
+                    if self.state.stop_requested:
+                        stopped = True
+                        self._publish_feedback(f"[stop] Stop request received; halting {label} after step {i}.")
+                        ok_all = False
+                        break
 
-            self._publish_feedback(f"[exec] Finished {label} — status: {'success' if ok_all else 'failed'}")
+            status_text = 'success' if ok_all and not stopped else 'stopped' if stopped else 'failed'
+            self._publish_feedback(f"[exec] Finished {label} — status: {status_text} (completed {steps_completed}/{len(actions)} steps)")
+
+            with self.state.lock:
+                if self.state.active_plan_id == plan_id:
+                    self.state.active_plan_id = None
+                if self.state.stop_requested:
+                    self.state.stop_requested = False
         return ok_all
 
     # ---------- Publish helpers ----------
 
-    def _publish_interpretation(self, text):
-        self.pub_interpretation.publish(String(data=text))
+    def _publish_plan(self, plan_id, actions):
+        self.pub_plan.publish(String(data=json.dumps({"plan_id": plan_id, "actions": actions})))
 
     def _publish_feedback(self, text):
         self.pub_feedback.publish(String(data=text))
