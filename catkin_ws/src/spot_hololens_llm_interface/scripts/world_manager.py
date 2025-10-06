@@ -25,7 +25,7 @@ class WorldManager:
                     "zones": {
                         "DeliveryArea": {
                             "centroid": {"x": 2.0, "y": 0.5, "z": 0.0},
-                            "yaw_hint": 1.57,
+                            "yaw_hint": -1.57,
                             "tags": ["delivery", "drop-off", "destination"]
                         }
                     },
@@ -179,12 +179,12 @@ class WorldManager:
                     "zones": {
                         "Patients": {
                             "centroid": {"x": 1.0, "y": 1.5, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["patients", "rooms", "beds"]
                         },
                         "ICU": {
                             "centroid": {"x": -1.0, "y": 0.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["critical", "icu", "intensive"]
                         },
                         "Surgery": {
@@ -230,12 +230,12 @@ class WorldManager:
                         },
                         "Fridge": {
                             "centroid": {"x": -1.0, "y": 1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["cold", "refrigerated", "fresh"]
                         },
                         "Stove": {
                             "centroid": {"x": 2.0, "y": 1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["hot", "cooking", "grill"]
                         }
                     },
@@ -270,17 +270,17 @@ class WorldManager:
                     "zones": {
                         "Trash": {
                             "centroid": {"x": 0.0, "y": -2.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 3.14,
                             "tags": ["waste", "disposal", "hazardous"]
                         },
                         "CleanRoom": {
                             "centroid": {"x": 1.0, "y": 0.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["sterile", "clean", "contamination-free"]
                         },
                         "Chemicals": {
                             "centroid": {"x": -1.0, "y": 0.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["hazardous", "chemicals", "dangerous"]
                         }
                     },
@@ -313,12 +313,12 @@ class WorldManager:
                     "zones": {
                         "Help": {
                             "centroid": {"x": 1.0, "y": 1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["service", "help", "information"]
                         },
                         "Fitting": {
                             "centroid": {"x": -3.0, "y": -1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["fitting", "changing", "rooms"]
                         },
                         "Furniture": {
@@ -357,12 +357,12 @@ class WorldManager:
                     "zones": {
                         "Gate": {
                             "centroid": {"x": 4.0, "y": -1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["gate", "boarding", "departure"]
                         },
                         "Baggage": {
                             "centroid": {"x": -3.0, "y": 0.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["baggage", "arrival", "luggage"]
                         },
                         "Shopping": {
@@ -372,7 +372,7 @@ class WorldManager:
                         },
                         "Food": {
                             "centroid": {"x": 0.0, "y": -2.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 3.14,
                             "tags": ["food", "restaurants", "dining"]
                         }
                     },
@@ -407,17 +407,17 @@ class WorldManager:
                     "zones": {
                         "Building": {
                             "centroid": {"x": 5.0, "y": 0.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 1.57,
                             "tags": ["construction", "work", "building"]
                         },
                         "Danger": {
                             "centroid": {"x": 4.0, "y": 1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": -1.57,
                             "tags": ["dangerous", "hazardous", "caution"]
                         },
                         "Safe": {
                             "centroid": {"x": 1.0, "y": -1.0, "z": 0.0},
-                            "yaw_hint": 0.0,
+                            "yaw_hint": 3.14,
                             "tags": ["safe", "clean", "finished"]
                         }
                     },

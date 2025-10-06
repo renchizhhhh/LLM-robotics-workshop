@@ -59,6 +59,8 @@ class SpotStateMachine(StateMachine):
     finish_automated_grasp = (grasping.to(carry))
     start_move_arm_pose = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | carry.to(move_arm_pose))
     finish_move_arm_pose = (move_arm_pose.to(stand))
+    start_drop_off = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | carry.to(move_arm_pose))
+    finish_drop_off = (move_arm_pose.to(stand))
     carry_to_stand = carry.to(stand)
     stand_to_carry = stand.to(carry)
     power_off_from_stand = stand.to(powered_off)
@@ -108,9 +110,11 @@ class SpotStateMachine(StateMachine):
         # Setup action clients
         self.automated_grasp_client = actionlib.SimpleActionClient('automated_grasp', AutomatedGraspAction)
         self.move_arm_pose_client = actionlib.SimpleActionClient('move_arm_pose', MoveArmPoseAction)
+        self.drop_off_client = actionlib.SimpleActionClient('drop_off_object', MoveArmPoseAction)
         if not self.dummy_mode:
             self.automated_grasp_client.wait_for_server(rospy.Duration(5.0))
             self.move_arm_pose_client.wait_for_server(rospy.Duration(5.0))
+            self.drop_off_client.wait_for_server(rospy.Duration(5.0))
             rospy.loginfo("FSM: Connected to action servers")
         
         # Initialize the state machine after setting up services
@@ -248,23 +252,34 @@ class SpotStateMachine(StateMachine):
     def on_enter_move_arm_pose(self):
         # Get parameters from kwargs
         kwargs = getattr(self, '_current_kwargs', {})
-        x = kwargs.get('x', 0.8)
-        y = kwargs.get('y', 0.0)
-        z = kwargs.get('z', 0.3)
-        qw = kwargs.get('qw', 0.7071)
-        qx = kwargs.get('qx', 0.7071)
-        qy = kwargs.get('qy', 0.0)
-        qz = kwargs.get('qz', 0.0)
-        duration = kwargs.get('duration', 3.0)
-        open_gripper = kwargs.get('open_gripper', False)
+        is_drop_off = kwargs.get('_is_drop_off', False)
         
-        rospy.loginfo(f"FSM: Moving arm to pose ({x}, {y}, {z})")
-        recorder.publish_event('start_move_arm_pose')
-        result = self._call_move_arm_pose_action(x, y, z, qw, qx, qy, qz, duration, open_gripper)
-        recorder.publish_event('stop_move_arm_pose')
-        
-        # Always return to stand state after move_arm_pose
-        self.finish_move_arm_pose()
+        if is_drop_off:
+            # Use drop_off action which handles full sequence
+            rospy.loginfo("FSM: Starting drop-off sequence")
+            recorder.publish_event('start_drop_off')
+            result = self._call_drop_off_action()
+            recorder.publish_event('stop_drop_off')
+            self.finish_drop_off()
+        else:
+            # Regular move_arm_pose action
+            x = kwargs.get('x', 0.8)
+            y = kwargs.get('y', 0.0)
+            z = kwargs.get('z', 0.3)
+            qw = kwargs.get('qw', 0.7071)
+            qx = kwargs.get('qx', 0.7071)
+            qy = kwargs.get('qy', 0.0)
+            qz = kwargs.get('qz', 0.0)
+            duration = kwargs.get('duration', 3.0)
+            open_gripper = kwargs.get('open_gripper', False)
+            
+            rospy.loginfo(f"FSM: Moving arm to pose ({x}, {y}, {z})")
+            recorder.publish_event('start_move_arm_pose')
+            result = self._call_move_arm_pose_action(x, y, z, qw, qx, qy, qz, duration, open_gripper)
+            recorder.publish_event('stop_move_arm_pose')
+            
+            # Always return to stand state after move_arm_pose
+            self.finish_move_arm_pose()
 
     def on_enter_grasping(self):
         # Get parameters from kwargs
@@ -460,6 +475,52 @@ class SpotStateMachine(StateMachine):
                 
         except Exception as e:
             rospy.logerr(f"FSM: Move arm pose action failed with exception: {e}")
+            return False
+
+    def _call_drop_off_action(self):
+        """Helper to call drop_off_object action (move to position, open gripper, close, stow)"""
+        if self.dummy_mode:
+            rospy.loginfo("FSM: DUMMY MODE - Simulating drop-off sequence")
+            rospy.sleep(4.0)  # Simulate time for full drop-off sequence in dummy mode
+            return True
+            
+        try:
+            # Create goal for drop_off action
+            # Default drop-off position (can be customized via kwargs if needed)
+            goal = MoveArmPoseGoal()
+            goal.x = 0.8      # 80cm forward
+            goal.y = 0.0      # No lateral movement
+            goal.z = 0.3      # 30cm above body
+            goal.qw = 0.7071  # Gripper pointing down
+            goal.qx = 0.7071
+            goal.qy = 0.0
+            goal.qz = 0.0
+            goal.duration = 1.0
+            goal.open_gripper = False  # Ignored by drop_off action
+            
+            # Send goal and wait for result (with timeout)
+            rospy.loginfo("FSM: Sending drop-off goal (move + open + close + stow)")
+            self.drop_off_client.send_goal(goal)
+            
+            # Wait for result with longer timeout for full sequence (20 seconds)
+            finished = self.drop_off_client.wait_for_result(rospy.Duration(20.0))
+            
+            if not finished:
+                rospy.logerr("FSM: Drop-off action timed out")
+                self.drop_off_client.cancel_goal()
+                return False
+            
+            # Get and process result
+            result = self.drop_off_client.get_result()
+            if result and result.success:
+                rospy.loginfo(f"FSM: Drop-off sequence succeeded! {result.message}")
+                return True
+            else:
+                rospy.logerr(f"FSM: Drop-off sequence failed: {result.message if result else 'Unknown error'}")
+                return False
+                
+        except Exception as e:
+            rospy.logerr(f"FSM: Drop-off action failed with exception: {e}")
             return False
 
     # Helper methods

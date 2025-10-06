@@ -849,7 +849,7 @@ class SpotGraspActionServer:
             feedback.progress = 0.1
             self.drop_off_server.publish_feedback(feedback)
             
-            assert(goal.open_gripper == False, "Gripper should be closed when dropping off")
+            assert goal.open_gripper == False, "Gripper should be closed when dropping off"
             # Execute the move by calling the internal logic
             move_result = self._execute_arm_move(goal, self.drop_off_server, feedback, progress_offset=0.1, progress_scale=0.25)
             

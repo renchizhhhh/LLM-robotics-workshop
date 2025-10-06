@@ -370,12 +370,14 @@ class SpotSimulationGUI:
                                    fill="#2d2d2d", outline="#00d4aa", width=3, stipple="gray25")
             self.canvas.create_text(canvas_x, canvas_y, text=zone_name.upper(), font=("Arial", 10, "bold"), fill="#00d4aa")
             
-            # Draw orientation hint if available
+            # Draw orientation hint if available (accounting for canvas rotation)
             if zone_data.get("yaw_hint") is not None:
                 yaw = zone_data["yaw_hint"]
                 arrow_length = 30
-                arrow_x = canvas_x + arrow_length * math.cos(yaw)
-                arrow_y = canvas_y - arrow_length * math.sin(yaw)
+                # Transform yaw for canvas coordinates: account for 90° CCW rotation (X->Y, Y->-X)
+                canvas_yaw = yaw - math.pi/2
+                arrow_x = canvas_x + arrow_length * math.cos(canvas_yaw)
+                arrow_y = canvas_y - arrow_length * math.sin(canvas_yaw)  # Negative for screen coords
                 self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#00d4aa", width=3, arrow=tk.LAST)
         
         # Draw objects with better visibility
@@ -722,8 +724,8 @@ class SpotSimulationGUI:
             "juice_box": {"x": 3.2, "y": -1.2, "present": True, "color": "#58a6ff"}
         }
         
-        self.pickup_location = {"x": 3.0, "y": -1.0}
-        self.dropoff_location = {"x": 2.0, "y": 1.5}
+        # Use zones from world configuration for drop-off locations
+        self.zones = self.world_config.get("zones", {})
         
         # ROS subscribers for state tracking
         self.sub_robot_state = rospy.Subscriber('/spot_entrance/robot_state', String, self.on_robot_state_headless)
@@ -762,11 +764,25 @@ class SpotSimulationGUI:
             self.current_action = "moving"
         elif "start_automated_grasp" in feedback:
             self.current_action = "grasping"
+        elif "start_drop_off" in feedback:
+            self.current_action = "dropping_off"
+            self.arm_status = "extended"
+            # Simulate the full drop-off sequence
+            rospy.sleep(1.0)
+            self.gripper_status = "open"
+            if self.has_object:
+                self.simulate_object_drop()
+            rospy.sleep(0.5)
+            self.gripper_status = "closed"
+            rospy.sleep(0.5)
+            self.arm_status = "stowed"
         elif "start_arm_command" in feedback:
             if "open" in feedback:
                 self.gripper_status = "open"
             elif "close" in feedback:
                 self.gripper_status = "closed"
+            elif "stow" in feedback:
+                self.arm_status = "stowed"
         elif "✓" in feedback:
             self.current_action = "idle"
     
@@ -851,6 +867,25 @@ class SpotSimulationGUI:
                         
                         # Check if there's an object at current location to grasp
                         self.simulate_grasp_attempt(target_object)
+                        
+                    elif "start_drop_off" in feedback:
+                        # Handle drop-off sequence: extend arm, open gripper, drop object, close, stow
+                        self.current_action = "dropping_off"
+                        self.arm_status = "extended"
+                        rospy.loginfo("GUI: Simulating drop-off sequence")
+                        # Simulate the full sequence
+                        import threading
+                        def simulate_drop_off_sequence():
+                            rospy.sleep(1.0)  # Arm extends
+                            self.gripper_status = "open"
+                            if self.has_object:
+                                self.simulate_object_drop()
+                            rospy.sleep(0.5)
+                            self.gripper_status = "closed"
+                            rospy.sleep(0.5)
+                            self.arm_status = "stowed"
+                            self.current_action = "idle"
+                        threading.Thread(target=simulate_drop_off_sequence, daemon=True).start()
                         
                     elif "start_arm_command" in feedback:
                         if "open" in feedback:
@@ -944,16 +979,26 @@ class SpotSimulationGUI:
     def simulate_object_drop(self):
         """Simulate dropping the carried object"""
         if self.has_object:
-            # Check if robot is near drop-off location
-            dropoff_distance = math.sqrt((self.robot_x - self.dropoff_location["x"])**2 + 
-                                       (self.robot_y - self.dropoff_location["y"])**2)
+            # Find the nearest drop-off zone
+            nearest_zone = None
+            min_distance = float('inf')
             
+            for zone_name, zone_data in self.zones.items():
+                centroid = zone_data["centroid"]
+                zone_x = centroid["x"]
+                zone_y = centroid["y"]
+                distance = math.sqrt((self.robot_x - zone_x)**2 + (self.robot_y - zone_y)**2)
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_zone = zone_data
             
-            if dropoff_distance <= 1.0:  # Within 1m of drop-off location
-                # Drop object at the drop-off location
-                drop_x = self.dropoff_location["x"]
-                drop_y = self.dropoff_location["y"]
-                rospy.loginfo(f"Dropping {self.carried_object_name} at drop-off location ({drop_x:.2f}, {drop_y:.2f})")
+            # Check if robot is near any drop-off zone
+            if nearest_zone and min_distance <= 1.0:  # Within 1m of drop-off zone
+                # Drop object at the nearest drop-off zone
+                drop_x = nearest_zone["centroid"]["x"]
+                drop_y = nearest_zone["centroid"]["y"]
+                rospy.loginfo(f"Dropping {self.carried_object_name} at drop-off zone ({drop_x:.2f}, {drop_y:.2f})")
             else:
                 # Drop object at current robot location
                 drop_x = self.robot_x

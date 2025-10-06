@@ -22,77 +22,36 @@ from world_manager import WorldManager
 # Universal Spot Path Planner Prompt v2
 PROMPT = """You are a path planning and action sequencing system for a Boston Dynamics Spot robot.
 
-CRITICAL: If the robot state is "Stand", NEVER use stand_up as the first action. The robot is already standing!
-
-INPUTS
-- CURRENT_STATE: JSON with robot pose and mode in the vision frame.
-- WORLD_MODEL: JSON with named waypoints, semantic zones and per-location orientation or drop rules.
-- TASK: natural language command with destinations in order.
-
-ACTION PRIMITIVES
-Allowed actions, one per line, no quotes, no numbering:
+ACTIONS (one per line, no quotes, no numbering):
 - stand_up
 - sit_down
 - start_moving x=<float> y=<float> yaw=<float> frame=body
-- get_image image_source=<camera_name>
-- get_initial_pose
 - start_automated_grasp object_type=<exact_object_name_from_user>
-- start_move_arm_pose x=<float> y=<float> z=<float> qw=<float> qx=<float> qy=<float> qz=<float> duration=<float> open_gripper=<true|false>
-- start_arm_command command_type=<open|close|stow|carry>
+- start_drop_off
 
-HARD RULES
-1. Execute destinations in the exact order given by the user.
-2. Output only the action list. One action per line. No comments.
-3. CRITICAL: If robot state is "Stand", NEVER use stand_up. Only use stand_up if robot state is "Sit" or "Powered off".
-4. Use relative body-frame moves. Each start_moving is relative to the current robot body frame.
-5. One degree of freedom per move line. Either x or y or yaw is non-zero.
-6. NEVER start with stand_up if robot is already standing.
-6. For navigation to a target T in vision frame:
-   6.1 First resolve T to numeric coordinates and a yaw_hint using WORLD_MODEL and synonyms.
-   6.2 If a yaw is required at T, add a separate yaw-only rotation to that yaw.
-   6.3 Move along body x and body y in separate steps to reach T. Keep each step axis-aligned.
-7. For pick-up targets, finish aligned to the pick yaw defined for that target. Default yaw 0.0 if unspecified.
-8. For drop-off targets, finish aligned to the drop yaw defined for that target. Default yaw 1.57 if unspecified.
-9. Use the exact user object name in start_automated_grasp object_type.
-10. Standard drop-off procedure after arriving and setting drop yaw:
-    - start_move_arm_pose x=0.8 y=0.0 z=0.3 qw=0.7071 qx=0.7071 qy=0.0 qz=0.0 duration=1.0 open_gripper=false
-    - start_arm_command command_type=open
-    - start_arm_command command_type=close
-    - start_arm_command command_type=stow
-11. Keep a safe final approach. Stop body motion with at least 0.30 m clearance before grasping when possible.
-12. If a referenced location or object cannot be resolved, output a single line: FAIL unresolved=<what>
+RULES:
+1. Execute destinations in exact order. Output only actions, one per line, no comments.
+2. CRITICAL: If robot state is "Stand", NEVER use stand_up. Only use stand_up if "Sit" or "Powered off".
+3. Use relative body-frame moves. One degree of freedom per move (x OR y OR yaw, not multiple).
+4. For navigation: resolve locations via WORLD_MODEL.names/synonyms, then plan axis-aligned moves in body frame.
+5. For PICK tasks: navigate to pickup location, rotate to pickup's pick_yaw (absolute direction), then use start_automated_grasp with exact object name (e.g. "tomato can").
+6. For DROP tasks: navigate to drop-off zone, rotate to zone's yaw_hint (absolute direction), then use start_drop_off.
+7. IMPORTANT: pick_yaw and yaw_hint are ABSOLUTE directions in world frame, calculate relative rotation from current robot yaw.
+8. Use exact user object names. If location/object unresolved: output "FAIL unresolved=<what>"
 
-PLANNING STEPS
-A. Parse TASK into an ordered list of subgoals with types: pick, place, visit, look.
-B. Resolve each natural language location via WORLD_MODEL.names and WORLD_MODEL.synonyms. Use canonical names.
-C. For each subgoal:
-   C1. CRITICAL: If robot state is "Stand", NEVER use stand_up. Only use stand_up if robot state is "Sit" or "Powered off".
-   C2. For PICK tasks: 
-       - ALWAYS navigate to the pickup location FIRST using start_moving
-       - Use WORLD_MODEL to find pickup location coordinates
-       - Then use start_automated_grasp with the exact object name
-       - NEVER grasp without first navigating to the pickup location
-   C3. For navigation: Rotate in yaw-only steps first if orientation helps axis-aligned approach.
-   C4. Plan axis-aligned moves in body frame toward the target. Use relative steps.
-   C5. On arrival, set required yaw using a yaw-only step.
-   C6. If pick: call start_automated_grasp with exact object_type.
-   C7. If drop: run the standard drop-off procedure.
-D. Do not repeat locations already satisfied unless the order requires a revisit.
-
-OUTPUT FORMAT
-Only the actions. One per line.
-
-CRITICAL RULES:
-- If robot state is "Stand", NEVER use stand_up
-- Always navigate to pickup location FIRST, then grasp
-- Start with navigation, not stand_up
-
-VARIABLES TO FILL
+PLANNING:
+A. Parse TASK into ordered subgoals (pick, place, visit, look).
+B. Resolve locations via WORLD_MODEL. Use canonical names.
+C. For each subgoal: 
+   - Navigate with axis-aligned moves to target location
+   - Calculate required rotation: target_yaw - current_yaw (use CURRENT_STATE.pose_vision.yaw)
+   - For PICK: target_yaw = waypoint's pick_yaw (absolute)
+   - For DROP: target_yaw = zone's yaw_hint (absolute)
+   - Rotate using calculated relative yaw, then execute pick/drop action
+D. Don't repeat satisfied locations unless order requires revisit.
 
 CURRENT_STATE = {current_state_json}
-
 WORLD_MODEL = {world_model_json}
-
 TASK = {command}"""
 
 class NaturalLanguageControl:
@@ -482,6 +441,17 @@ class NaturalLanguageControl:
                 command=command
             )
             
+            # Debug: Print the prompt components to terminal
+            print("\n" + "="*80)
+            print("LLM PROMPT DEBUG")
+            print("="*80)
+            print(f"CURRENT_STATE:")
+            print(json.dumps(current_state_json, indent=2))
+            print(f"\nWORLD_MODEL:")
+            print(json.dumps(self.world_model, indent=2))
+            print(f"\nTASK: {command}")
+            print("="*80)
+            
             response = self.llm.models.generate_content(
                 model="gemini-2.5-pro",
                 contents=formatted_prompt
@@ -549,6 +519,10 @@ class NaturalLanguageControl:
                                 params[key] = value
                     
                     # Execute the action and track position in dummy mode
+                    # Special handling for start_drop_off: add internal flag
+                    if action_name == 'start_drop_off':
+                        params['_is_drop_off'] = True
+                    
                     self.spot_fsm.send(action_name, **params)
                     
                     # Update position tracking for dummy mode
@@ -583,7 +557,13 @@ class NaturalLanguageControl:
                             rospy.loginfo(f"[NL_CONTROL DEBUG] World displacement: ({world_dx:.2f}, {world_dy:.2f})")
                             rospy.loginfo(f"[NL_CONTROL DEBUG] NL_Control position updated to: ({self.current_position[0]:.2f}, {self.current_position[1]:.2f}, {self.current_position[2]:.2f})")
                 else:
-                    self.spot_fsm.send(action.strip())
+                    # Handle actions without parameters
+                    action_name = action.strip()
+                    if action_name == 'start_drop_off':
+                        # Add internal flag for drop_off
+                        self.spot_fsm.send(action_name, _is_drop_off=True)
+                    else:
+                        self.spot_fsm.send(action_name)
                 
                 # Publish completion feedback for simulation
                 self.pub_feedback.publish(String(data=f"[exec] ✓ {action}"))
@@ -775,7 +755,7 @@ ROBOT ACTIONS:
 - sit_down: Robot sits down  
 - start_moving, x=X, y=Y, yaw=YAW: Robot moves X meters forward, Y meters left (if Y>0) or right (if Y<0), rotates YAW radians left (if YAW>0) or right (if YAW<0)
 - start_automated_grasp, object_type="OBJECT": Robot grasps the OBJECT
-- start_move_arm_pose, x=X, y=Y, z=Z: Robot moves arm to position (X,Y,Z)
+- start_drop_off: Robot performs full drop-off sequence (move arm to position, open gripper, close gripper, stow arm)
 - start_arm_command, command_type=COMMAND: Robot executes arm command (open/close/stow/carry)
 
 PLAN: {plan}
