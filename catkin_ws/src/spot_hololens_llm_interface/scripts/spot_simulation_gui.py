@@ -55,9 +55,12 @@ class SpotSimulationGUI:
             self.headless_mode = False
         
         # Robot state
-        self.robot_x = 0.0  # World frame position (same as NL_Control)
-        self.robot_y = 0.0
+        self.robot_x = 1.35  # World frame position - center of cell (4,4) = (4.5 * 0.3, 4.5 * 0.3)
+        self.robot_y = 1.35
         self.robot_yaw = 0.0  # Radians - robot starts facing forward (X direction)
+        self.robot_row = 4  # Grid position - start in true middle (4,4)
+        self.robot_col = 4
+        self.robot_facing = "N"  # N, S, E, W
         self.robot_state = "unknown"
         self.current_action = "idle"
         self.has_object = False
@@ -71,6 +74,10 @@ class SpotSimulationGUI:
         # Dynamic world landmarks based on configuration
         self.waypoints = self.world_config.get("waypoints", {})
         self.zones = self.world_config.get("zones", {})
+        
+        # Convert grid coordinates to x,y coordinates for GUI
+        self.waypoints = self._convert_grid_to_xy(self.waypoints)
+        self.zones = self._convert_grid_to_xy(self.zones)
         
         # Position tracking - convert vision frame to display coordinates
         self.vision_to_body_offset_x = 0.0
@@ -101,6 +108,10 @@ class SpotSimulationGUI:
         
         # Dark mode styling
         self.root.configure(bg='#1a1a1a')
+        self.root.rowconfigure(0, weight=1)  # Canvas row grows with window
+        self.root.rowconfigure(1, weight=0)  # Info frame - fixed height
+        self.root.rowconfigure(2, weight=0)  # Bottom frame - fixed height
+        self.root.columnconfigure(0, weight=1)
         
         # Get screen dimensions for fullscreen canvas
         screen_width = self.root.winfo_screenwidth()
@@ -108,45 +119,223 @@ class SpotSimulationGUI:
         
         # Create canvas for visualization (larger, fullscreen)
         canvas_width = screen_width - 50
-        canvas_height = screen_height - 200  # Leave space for controls
+        canvas_height = screen_height - 250  # More space for bottom panels
         self.canvas = tk.Canvas(self.root, width=canvas_width, height=canvas_height, bg='#0d1117')
-        self.canvas.pack(pady=20)
+        self.canvas.grid(row=0, column=0, sticky="nsew", padx=20, pady=10)
         
-        # Info panel with dark theme
+        # Info panel with dark theme - compact padding
         self.info_frame = tk.Frame(self.root, bg='#1a1a1a')
-        self.info_frame.pack(fill=tk.X, padx=20, pady=15)
+        self.info_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 5))
+        self.root.grid_rowconfigure(1, weight=0)
+        # Configure column weights for proper spacing
+        self.info_frame.columnconfigure(0, weight=0)  # Left column (status labels)
+        self.info_frame.columnconfigure(1, weight=0)  # Middle column (world info)
+        self.info_frame.columnconfigure(2, weight=1)  # Right column (model/prompt) - expands
         
-        # Status labels with futuristic styling
-        self.state_label = tk.Label(self.info_frame, text="State: unknown", font=("Arial", 14, "bold"), 
+        # Status labels - compact size with minimal padding
+        self.state_label = tk.Label(self.info_frame, text="State: unknown", font=("Arial", 10, "bold"), 
                                    bg='#1a1a1a', fg='#00d4aa')
-        self.state_label.grid(row=0, column=0, sticky=tk.W, padx=15, pady=5)
+        self.state_label.grid(row=0, column=0, sticky=tk.W, padx=10, pady=2)
         
-        self.position_label = tk.Label(self.info_frame, text="Position: (0.0, 0.0, 0.0°)", font=("Arial", 14, "bold"), 
+        self.position_label = tk.Label(self.info_frame, text="Position: (0.0, 0.0, 0.0°)", font=("Arial", 10, "bold"), 
                                       bg='#1a1a1a', fg='#58a6ff')
-        self.position_label.grid(row=0, column=1, sticky=tk.W, padx=15, pady=5)
+        self.position_label.grid(row=1, column=0, sticky=tk.W, padx=10, pady=2)
         
-        self.action_label = tk.Label(self.info_frame, text="Action: idle", font=("Arial", 14, "bold"), 
+        self.action_label = tk.Label(self.info_frame, text="Action: idle", font=("Arial", 10, "bold"), 
                                     bg='#1a1a1a', fg='#f85149')
-        self.action_label.grid(row=1, column=0, sticky=tk.W, padx=15, pady=5)
+        self.action_label.grid(row=2, column=0, sticky=tk.W, padx=10, pady=2)
         
-        self.arm_label = tk.Label(self.info_frame, text="Arm: stowed | Gripper: closed", font=("Arial", 14, "bold"), 
+        self.arm_label = tk.Label(self.info_frame, text="Arm: stowed | Gripper: closed", font=("Arial", 10, "bold"), 
                                  bg='#1a1a1a', fg='#ffa657')
-        self.arm_label.grid(row=1, column=1, sticky=tk.W, padx=15, pady=5)
+        self.arm_label.grid(row=3, column=0, sticky=tk.W, padx=10, pady=2)
         
-        # World info label
-        self.world_label = tk.Label(self.info_frame, text=f"World: {self.world_name}", font=("Arial", 12, "bold"), 
+        # World info label - compact
+        self.world_label = tk.Label(self.info_frame, text=f"World: {self.world_name}", font=("Arial", 10, "bold"), 
                                    bg='#1a1a1a', fg='#39d353')
-        self.world_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=15, pady=5)
+        self.world_label.grid(row=0, column=1, sticky=tk.W, padx=10, pady=2)
         
         # World selection button
         self.world_button = tk.Button(self.info_frame, text="Change World", font=("Arial", 10, "bold"),
                                      bg='#2d2d2d', fg='#f0f6fc', relief='flat', bd=1,
                                      command=self.show_world_selection)
-        self.world_button.grid(row=2, column=2, sticky=tk.E, padx=15, pady=5)
+        self.world_button.grid(row=1, column=1, sticky=tk.W, padx=15, pady=5)
+        
+        # LLM Model selector - positioned on right side (compact)
+        model_frame = tk.Frame(self.info_frame, bg='#1a1a1a')
+        model_frame.grid(row=0, column=2, sticky=tk.E, padx=10, pady=2)
+        
+        model_label = tk.Label(model_frame, text="Model:", font=("Arial", 10, "bold"),
+                              bg='#1a1a1a', fg='#ffa657')
+        model_label.pack(side=tk.LEFT, padx=(0, 3))
+        
+        # Check if GOOGLE_API_KEY is set
+        import os
+        gemini_available = bool(os.getenv('GOOGLE_API_KEY'))
+        
+        # Model options with dark mode styling
+        self.model_var = tk.StringVar(value='120B Low Reasoning')
+        
+        # Create custom styled combobox for dark mode
+        self.model_combo = ttk.Combobox(model_frame, textvariable=self.model_var,
+                                       font=("Arial", 10), state='readonly', width=20)
+        
+        # Configure dark mode styling for combobox
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure('TCombobox',
+                       fieldbackground='#2d2d2d',
+                       background='#2d2d2d',
+                       foreground='#f0f6fc',
+                       borderwidth=1,
+                       relief='flat')
+        style.map('TCombobox',
+                 fieldbackground=[('readonly', '#2d2d2d')],
+                 background=[('readonly', '#2d2d2d')],
+                 foreground=[('readonly', '#f0f6fc')])
+        
+        # Set available models
+        if gemini_available:
+            self.model_combo['values'] = ('120B Low Reasoning', '120B Medium Reasoning', '120B High Reasoning', 'Gemini Robotics 1.5', 'Gemini Pro 2.5')
+        else:
+            self.model_combo['values'] = ('120B Low Reasoning', '120B Medium Reasoning', '120B High Reasoning', 'Gemini Robotics 1.5 (API key required)', 'Gemini Pro 2.5 (API key required)')
+        
+        self.model_combo.current(0)
+        self.model_combo.pack(side=tk.LEFT)
+        
+        # Publisher for model selection
+        self.pub_model_select = rospy.Publisher('/nl_control/model_select', String, queue_size=1)
+        
+        # Bind selection event
+        def on_model_change(event):
+            selection = self.model_combo.get()
+            # Map display names to model IDs
+            model_map = {
+                '120B Low Reasoning': 'base-120b-low',
+                '120B Medium Reasoning': 'base-120b-medium', 
+                '120B High Reasoning': 'base-120b-high',
+                'Gemini Robotics 1.5': 'gemini-robotics-er-1.5-preview',
+                'Gemini Robotics 1.5 (API key required)': 'gemini-robotics-er-1.5-preview',
+                'Gemini Pro 2.5': 'gemini-2.5-pro',
+                'Gemini Pro 2.5 (API key required)': 'gemini-2.5-pro'
+            }
+            model_id = model_map.get(selection, 'base-120b')
+            
+            # Only publish if not a disabled option
+            if gemini_available or model_id.startswith('base-120b'):
+                self.pub_model_select.publish(String(data=model_id))
+                rospy.loginfo(f"Model selection published: {model_id}")
+            else:
+                # Reset to 120B Low Reasoning if GOOGLE_API_KEY not set
+                self.model_combo.set('120B Low Reasoning')
+                rospy.logwarn("GOOGLE_API_KEY not set - cannot select Gemini models")
+        
+        self.model_combo.bind('<<ComboboxSelected>>', on_model_change)
+        
+        # Prompt Type selector - right next to model selector
+        prompt_label = tk.Label(model_frame, text="Prompt:", font=("Arial", 10, "bold"),
+                               bg='#1a1a1a', fg='#58a6ff')
+        prompt_label.pack(side=tk.LEFT, padx=(10, 3))
+        
+        self.prompt_var = tk.StringVar(value='Base')
+        self.prompt_combo = ttk.Combobox(model_frame, textvariable=self.prompt_var,
+                                        font=("Arial", 10), state='readonly', width=16)
+
+        # Populate prompt options from discovered prompt files if available
+        self._available_prompts = {}
+        try:
+            # Try to import get_available_prompts from nl_control
+            import sys
+            import os
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'spot_hololens_llm_interface'))
+            from nl_control import get_available_prompts
+            if callable(get_available_prompts):
+                self._available_prompts = get_available_prompts()  # {name: text}
+        except Exception:
+            self._available_prompts = {}
+
+        if self._available_prompts:
+            # Present user-friendly capitalized names in combobox
+            prompt_names = [name.capitalize() for name in sorted(self._available_prompts.keys())]
+            self.prompt_combo['values'] = prompt_names
+            # Default to 'Base' if present, else first discovered
+            if 'base' in self._available_prompts:
+                default_index = prompt_names.index('Base') if 'Base' in prompt_names else 0
+            else:
+                default_index = 0
+            self.prompt_combo.current(default_index)
+        else:
+            # Fallback to the original two-option list
+            self.prompt_combo['values'] = ('Base', 'Reasoning')
+            self.prompt_combo.current(0)
+
+        self.prompt_combo.pack(side=tk.LEFT)
+        
+        # Publisher for prompt type selection
+        self.pub_prompt_select = rospy.Publisher('/nl_control/prompt_select', String, queue_size=1)
+        
+        # Bind prompt selection event
+        def on_prompt_change(event):
+            selection = self.prompt_combo.get()
+            # Map display name back to prompt name
+            prompt_name = selection.lower()
+            # If we have available prompts, ensure mapping exists
+            if self._available_prompts:
+                # selection was capitalized; convert back to key
+                key = prompt_name
+                if key in self._available_prompts:
+                    prompt_name = key
+                else:
+                    # attempt to find matching key ignoring case
+                    for k in self._available_prompts.keys():
+                        if k.lower() == selection.lower():
+                            prompt_name = k
+                            break
+
+            # Publish the prompt name (e.g., 'base' or 'reasoning') for nl_control
+            self.pub_prompt_select.publish(String(data=prompt_name))
+            rospy.loginfo(f"Prompt selection published: {prompt_name}")
+        
+        self.prompt_combo.bind('<<ComboboxSelected>>', on_prompt_change)
+
+        # Publish initial prompt selection to NL control so it can pick up the correct prompt at startup
+        try:
+            initial_selection = self.prompt_combo.get()
+            # Reuse handler logic to determine prompt name
+            event = type('E', (), {'widget': None})()
+            on_prompt_change(event)
+        except Exception:
+            pass
+        
+        # Tooltip for disabled options
+        if not gemini_available:
+            tooltip_label = tk.Label(model_frame, text="💡 Set GOOGLE_API_KEY to enable Gemini models",
+                                    font=("Arial", 9), bg='#1a1a1a', fg='#8b949e')
+            tooltip_label.pack(side=tk.LEFT, padx=10)
+        
+        # Reset and Stop buttons - positioned on the far right below model/prompt selectors
+        self.reset_button = tk.Button(model_frame, text="Reset", command=self.reset_simulation,
+                                     bg='#21262d', fg='#f0f6fc', font=("Arial", 10, "bold"),
+                                     activebackground='#30363d', activeforeground='#f0f6fc',
+                                     relief='flat', bd=1, padx=8, pady=4)
+        self.reset_button.pack(side=tk.LEFT, padx=(10, 5))
+        
+        self.stop_button = tk.Button(model_frame, text="Stop", command=self._on_stop,
+                                    bg='#f85149', fg='#f0f6fc', font=("Arial", 10, "bold"),
+                                    activebackground='#ff7b72', activeforeground='#f0f6fc',
+                                    relief='flat', bd=1, padx=8, pady=4)
+        self.stop_button.pack(side=tk.LEFT, padx=(5, 0))
+        
+        # Footer container keeps lower panels anchored regardless of window manager quirks
+        self.bottom_frame = tk.Frame(self.root, bg='#1a1a1a')
+        self.bottom_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        self.root.grid_rowconfigure(2, weight=0)
+        self.bottom_frame.columnconfigure(0, weight=1)
+        self.bottom_frame.columnconfigure(1, weight=1)
+        self.bottom_frame.rowconfigure(0, weight=1)
         
         # Natural language feedback section (middle panel)
-        self.feedback_frame = tk.Frame(self.root, bg='#2d2d2d', relief='flat', bd=0)
-        self.feedback_frame.place(relx=0.33, rely=0.82, relwidth=0.33, relheight=0.12)
+        self.feedback_frame = tk.Frame(self.bottom_frame, bg='#2d2d2d', relief='flat', bd=0)
+        self.feedback_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         
         # Create scrollable text widget for NL feedback
         self.feedback_text = tk.Text(self.feedback_frame, 
@@ -164,16 +353,35 @@ class SpotSimulationGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
         # Insert initial text
-        initial_text = """Ready for commands"""
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        initial_text = f"[{timestamp}] System initialized - Ready for commands"
         self.feedback_text.insert(tk.END, initial_text)
         self.feedback_text.config(state=tk.DISABLED)  # Make read-only
         
         # Bind mouse wheel scrolling
         self.feedback_text.bind("<MouseWheel>", self._on_mousewheel)
+
+        # Helper to append timestamped lines (mirrors standalone)
+        def _update_feedback_text(message):
+            try:
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+                formatted = f"[{timestamp}] {message}"
+                self.feedback_text.config(state=tk.NORMAL)
+                if self.feedback_text.get(1.0, tk.END).strip():
+                    self.feedback_text.insert(tk.END, "\n")
+                self.feedback_text.insert(tk.END, formatted)
+                self.feedback_text.config(state=tk.DISABLED)
+                self.feedback_text.see(tk.END)
+            except Exception:
+                pass
+        # Store as instance method reference
+        self._update_feedback_text = _update_feedback_text
         
         # Robot control section (right panel)
-        self.ui_frame = tk.Frame(self.root, bg='#2d2d2d', relief='flat', bd=0)
-        self.ui_frame.place(relx=0.66, rely=0.82, relwidth=0.33, relheight=0.12)
+        self.ui_frame = tk.Frame(self.bottom_frame, bg='#2d2d2d', relief='flat', bd=0)
+        self.ui_frame.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
         
         # Title
         title_label = tk.Label(self.ui_frame, text="Robot Control", 
@@ -219,22 +427,6 @@ class SpotSimulationGUI:
         # Initially disable approve/decline buttons
         self.approve_button.config(state='disabled')
         self.decline_button.config(state='disabled')
-        
-        # Control buttons with dark theme
-        button_frame = tk.Frame(self.root, bg='#1a1a1a')
-        button_frame.pack(fill=tk.X, padx=20, pady=15)
-        
-        self.reset_button = tk.Button(button_frame, text="Reset Simulation", command=self.reset_simulation,
-                                     bg='#21262d', fg='#f0f6fc', font=("Arial", 12, "bold"),
-                                     activebackground='#30363d', activeforeground='#f0f6fc',
-                                     relief='flat', padx=20, pady=10)
-        self.reset_button.pack(side=tk.LEFT, padx=10)
-        
-        self.stop_button = tk.Button(button_frame, text="Stop", command=self._on_stop,
-                                    bg='#f85149', fg='#f0f6fc', font=("Arial", 12, "bold"),
-                                    activebackground='#ff7b72', activeforeground='#f0f6fc',
-                                    relief='flat', padx=20, pady=10)
-        self.stop_button.pack(side=tk.LEFT, padx=10)
         
         # ROS subscribers
         self.sub_robot_state = rospy.Subscriber('/spot_entrance/robot_state', String, self.on_robot_state)
@@ -296,42 +488,119 @@ class SpotSimulationGUI:
         
         return vision_dx, vision_dy
     
+    def _get_canvas_dimensions(self):
+        """Return current canvas dimensions with fallbacks for early layout."""
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+        if width <= 1 or height <= 1:
+            width = self.canvas.winfo_reqwidth()
+            height = self.canvas.winfo_reqheight()
+        if width <= 1 or height <= 1:
+            try:
+                width = int(self.canvas['width'])
+                height = int(self.canvas['height'])
+            except Exception:
+                width, height = 1200, 800
+        return width, height
+    
+    def cell_to_canvas(self, row, col):
+        """Convert grid cell coordinates to canvas coordinates."""
+        cell_size = 60
+        canvas_width, canvas_height = self._get_canvas_dimensions()
+        grid_width = 10 * cell_size
+        grid_height = 10 * cell_size
+        grid_start_x = (canvas_width - grid_width) // 2
+        grid_start_y = (canvas_height - grid_height) // 2
+        
+        x = grid_start_x + col * cell_size + cell_size // 2
+        y = grid_start_y + row * cell_size + cell_size // 2
+        return x, y
+    
     def draw_world(self):
         """Draw the static world elements"""
         self.canvas.delete("all")
         
-        # Draw coordinate system (rotated)
-        center_x, center_y = self.vision_to_canvas(0, 0)
+        # Draw 10x10 grid
+        cell_size = 60
+        grid_width = 10 * cell_size
+        grid_height = 10 * cell_size
         
-        # X-axis (forward) - now points upward after rotation - cyan
-        self.canvas.create_line(center_x, center_y, center_x, center_y - 120, 
-                               fill="#00d4aa", width=3, arrow=tk.LAST)
-        self.canvas.create_text(center_x + 15, center_y - 130, text="X (forward)", fill="#00d4aa", font=("Arial", 12, "bold"))
+        # Get canvas dimensions and center the grid
+        canvas_width, canvas_height = self._get_canvas_dimensions()
+        grid_start_x = (canvas_width - grid_width) // 2
+        grid_start_y = (canvas_height - grid_height) // 2
         
-        # Y-axis (left) - now points left after rotation - blue  
-        self.canvas.create_line(center_x, center_y, center_x - 120, center_y, 
-                               fill="#58a6ff", width=3, arrow=tk.LAST)
-        self.canvas.create_text(center_x - 130, center_y - 15, text="Y (left)", fill="#58a6ff", font=("Arial", 12, "bold"))
+        # Draw cell backgrounds first for better visibility
+        for row in range(10):
+            for col in range(10):
+                x1 = grid_start_x + col * cell_size
+                y1 = grid_start_y + row * cell_size
+                x2 = x1 + cell_size
+                y2 = y1 + cell_size
+                # Alternate cell colors for better grid visibility
+                if (row + col) % 2 == 0:
+                    self.canvas.create_rectangle(x1, y1, x2, y2, fill="#2a2a2a", outline="")
+                else:
+                    self.canvas.create_rectangle(x1, y1, x2, y2, fill="#1a1a1a", outline="")
         
-        # Draw grid with futuristic styling
-        canvas_width = self.canvas.winfo_width() if self.canvas.winfo_width() > 1 else 1200
-        canvas_height = self.canvas.winfo_height() if self.canvas.winfo_height() > 1 else 800
+        # Draw wall cells (background layer)
+        wall_cells = self.world_config.get("wall_cells", [])
         
-        for i in range(-10, 11):
-            x, y = self.vision_to_canvas(i, 0)
-            if 0 <= x <= canvas_width:
-                self.canvas.create_line(x, 0, x, canvas_height, fill="#21262d", width=1)
-            x, y = self.vision_to_canvas(0, i)
-            if 0 <= y <= canvas_height:
-                self.canvas.create_line(0, y, canvas_width, y, fill="#21262d", width=1)
+        for wall_cell in wall_cells:
+            row, col = wall_cell[0], wall_cell[1]
+            
+            # Get cell position
+            cell_x, cell_y = self.cell_to_canvas(row, col)
+            cell_size = 60
+            
+            # Draw wall cell as a filled rectangle
+            x1 = cell_x - cell_size // 2
+            y1 = cell_y - cell_size // 2
+            x2 = cell_x + cell_size // 2
+            y2 = cell_y + cell_size // 2
+            
+            # Draw wall cell with dark color and border
+            self.canvas.create_rectangle(x1, y1, x2, y2, fill="#444444", outline="#666666", width=2)
+            
+            # Add wall pattern/texture
+            self.canvas.create_line(x1+10, y1+10, x2-10, y2-10, fill="#666666", width=2)
+            self.canvas.create_line(x1+10, y2-10, x2-10, y1+10, fill="#666666", width=2)
         
-        # Draw waypoints dynamically
+        # Draw grid lines with much better visibility (after wall cells)
+        for i in range(11):  # 11 lines for 10 cells
+            # Vertical lines - make them very visible
+            x = grid_start_x + i * cell_size
+            self.canvas.create_line(x, grid_start_y, x, grid_start_y + grid_height, fill="#ffffff", width=3)
+            # Horizontal lines - make them very visible
+            y = grid_start_y + i * cell_size
+            self.canvas.create_line(grid_start_x, y, grid_start_x + grid_width, y, fill="#ffffff", width=3)
+        
+        # Draw coordinate labels (on top of walls)
+        for i in range(10):
+            # Row labels (left side)
+            x = grid_start_x - 20
+            y = grid_start_y + i * cell_size + cell_size // 2
+            self.canvas.create_text(x, y, text=str(i), fill="#58a6ff", font=("Arial", 12, "bold"))
+            # Column labels (top side)
+            x = grid_start_x + i * cell_size + cell_size // 2
+            y = grid_start_y - 20
+            self.canvas.create_text(x, y, text=str(i), fill="#58a6ff", font=("Arial", 12, "bold"))
+        
+        # Draw waypoints dynamically (on top of walls)
         for waypoint_name, waypoint_data in self.waypoints.items():
-            x, y = waypoint_data["x"], waypoint_data["y"]
-            canvas_x, canvas_y = self.vision_to_canvas(x, y)
+            # Handle both grid format (row, col) and converted format (x, y)
+            if "row" in waypoint_data and "col" in waypoint_data:
+                row, col = waypoint_data["row"], waypoint_data["col"]
+                canvas_x, canvas_y = self.cell_to_canvas(row, col)
+            else:
+                # Convert from x,y coordinates back to grid for display
+                x, y = waypoint_data["x"], waypoint_data["y"]
+                col = round(x / 0.3)
+                row = round(y / 0.3)
+                canvas_x, canvas_y = self.cell_to_canvas(row, col)
             
             # Determine waypoint type and styling
-            if waypoint_data.get("pick_yaw") is not None:
+            if waypoint_data.get("pick_direction") is not None:
                 # Pickup waypoint - show category name
                 color = "#ffa657"
                 outline = "#ff7b72"
@@ -347,78 +616,97 @@ class SpotSimulationGUI:
                                        fill=color, outline=outline, width=3)
             self.canvas.create_text(canvas_x, canvas_y-40, text=label, font=("Arial", 12, "bold"), fill=color)
             
-            # Draw orientation indicator if specified (accounting for canvas rotation)
-            if waypoint_data.get("pick_yaw") is not None:
-                yaw = waypoint_data["pick_yaw"]
+            # Draw orientation indicator if specified
+            if waypoint_data.get("pick_direction") is not None:
+                direction = waypoint_data["pick_direction"]
                 arrow_length = 30
-                # Transform yaw for canvas coordinates: account for 90° CCW rotation (X->Y, Y->-X)
-                # Canvas yaw = vision yaw - 90°, then negate Y for screen coords
-                canvas_yaw = yaw - math.pi/2
-                arrow_x = canvas_x + arrow_length * math.cos(canvas_yaw)
-                arrow_y = canvas_y - arrow_length * math.sin(canvas_yaw)  # Negative for screen coords
+                # Calculate arrow direction based on cardinal direction
+                if direction == "N":
+                    arrow_x, arrow_y = canvas_x, canvas_y - arrow_length
+                elif direction == "S":
+                    arrow_x, arrow_y = canvas_x, canvas_y + arrow_length
+                elif direction == "E":
+                    arrow_x, arrow_y = canvas_x + arrow_length, canvas_y
+                elif direction == "W":
+                    arrow_x, arrow_y = canvas_x - arrow_length, canvas_y
+                else:
+                    arrow_x, arrow_y = canvas_x, canvas_y - arrow_length
+                
                 self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#ffffff", width=3, arrow=tk.LAST)
         
         # Draw zones dynamically (these are dropoff points) with collision avoidance
         adjusted_zones = self._adjust_zones_for_collisions()
         for zone_name, zone_data in adjusted_zones.items():
-            centroid = zone_data["centroid"]
-            x, y = centroid["x"], centroid["y"]
-            canvas_x, canvas_y = self.vision_to_canvas(x, y)
+            # Handle both grid format (row, col) and converted format (x, y)
+            if "row" in zone_data and "col" in zone_data:
+                row, col = zone_data["row"], zone_data["col"]
+                canvas_x, canvas_y = self.cell_to_canvas(row, col)
+            else:
+                # Convert from x,y coordinates back to grid for display
+                x, y = zone_data["x"], zone_data["y"]
+                col = round(x / 0.3)
+                row = round(y / 0.3)
+                canvas_x, canvas_y = self.cell_to_canvas(row, col)
             
             # Draw zone as a larger circle with dropoff styling
             self.canvas.create_oval(canvas_x-40, canvas_y-40, canvas_x+40, canvas_y+40,
                                    fill="#2d2d2d", outline="#00d4aa", width=3, stipple="gray25")
             self.canvas.create_text(canvas_x, canvas_y, text=zone_name.upper(), font=("Arial", 10, "bold"), fill="#00d4aa")
-            
-            # Draw orientation hint if available (accounting for canvas rotation)
-            if zone_data.get("yaw_hint") is not None:
-                yaw = zone_data["yaw_hint"]
-                arrow_length = 30
-                # Transform yaw for canvas coordinates: account for 90° CCW rotation (X->Y, Y->-X)
-                canvas_yaw = yaw - math.pi/2
-                arrow_x = canvas_x + arrow_length * math.cos(canvas_yaw)
-                arrow_y = canvas_y - arrow_length * math.sin(canvas_yaw)  # Negative for screen coords
+
+            # Draw direction arrow indicating required drop-off orientation (match standalone)
+            direction = zone_data.get("direction")
+            if direction:
+                arrow_length = 32
+                if direction == "N":
+                    arrow_x, arrow_y = canvas_x, canvas_y - arrow_length
+                elif direction == "S":
+                    arrow_x, arrow_y = canvas_x, canvas_y + arrow_length
+                elif direction == "E":
+                    arrow_x, arrow_y = canvas_x + arrow_length, canvas_y
+                elif direction == "W":
+                    arrow_x, arrow_y = canvas_x - arrow_length, canvas_y
+                else:
+                    arrow_x, arrow_y = canvas_x, canvas_y - arrow_length
                 self.canvas.create_line(canvas_x, canvas_y, arrow_x, arrow_y, fill="#00d4aa", width=3, arrow=tk.LAST)
         
-        # Draw objects with better visibility
+        # Draw objects with better visibility (on top of everything)
         for obj_name, obj_data in self.objects.items():
             if obj_data["present"]:
-                obj_x, obj_y = self.vision_to_canvas(obj_data["x"], obj_data["y"])
+                obj_x, obj_y = self.cell_to_canvas(obj_data["row"], obj_data["col"])
                 self.canvas.create_oval(obj_x-12, obj_y-12, obj_x+12, obj_y+12,
                                       fill=obj_data["color"], outline="#f0f6fc", width=2)
                 self.canvas.create_text(obj_x, obj_y+25, text=obj_name, font=("Arial", 10, "bold"), fill="#f0f6fc")
     
     def draw_robot(self):
         """Draw the robot at current position with realistic gripper"""
-        # Convert robot position to canvas coordinates
-        robot_canvas_x, robot_canvas_y = self.vision_to_canvas(self.robot_x, self.robot_y)
+        # Convert robot position to canvas coordinates using grid-based positioning
+        robot_canvas_x, robot_canvas_y = self.cell_to_canvas(self.robot_row, self.robot_col)
         
         # Robot dimensions (scaled larger)
         robot_width = 56  # 0.7m * 80 pixels/m
         robot_length = 112  # 1.4m * 80 pixels/m
         
         # Calculate robot corner points based on orientation
-        # Robot's length should be parallel to X-axis (forward direction) when yaw=0
-        # Subtract 90 degree offset so robot faces up (X forward) at start
-        # Positive yaw is counterclockwise (left) - invert for correct display
-        display_yaw = -self.robot_yaw - math.pi/2
+        # Use numeric yaw provided by NL/robot (already aligned with convention)
+        display_yaw = self.robot_yaw
         cos_yaw = math.cos(display_yaw)
         sin_yaw = math.sin(display_yaw)
         
-        # Robot corners relative to center (length along X-axis, width along Y-axis)
-        # Front is in positive X direction - robot is oriented correctly
+        # Robot corners relative to center (length along Y-axis, width along X-axis)
+        # Front is in positive Y direction to match GUI coordinate system
         corners = [
-            (robot_length/2, -robot_width/2),   # front left  
-            (-robot_length/2, -robot_width/2),  # rear left
-            (-robot_length/2, robot_width/2),   # rear right
-            (robot_length/2, robot_width/2),    # front right
+            (-robot_width/2, robot_length/2),   # front left  
+            (-robot_width/2, -robot_length/2),  # rear left
+            (robot_width/2, -robot_length/2),   # rear right
+            (robot_width/2, robot_length/2),    # front right
         ]
         
         # Rotate and translate corners
+        # Use inverted rotation matrix to match GUI coordinate system
         robot_corners = []
         for dx, dy in corners:
-            rotated_dx = cos_yaw * dx - sin_yaw * dy
-            rotated_dy = sin_yaw * dx + cos_yaw * dy
+            rotated_dx = cos_yaw * dx + sin_yaw * dy
+            rotated_dy = -sin_yaw * dx + cos_yaw * dy
             robot_corners.extend([robot_canvas_x + rotated_dx, robot_canvas_y + rotated_dy])
         
         # Draw robot body with futuristic colors
@@ -432,9 +720,11 @@ class SpotSimulationGUI:
             
         self.canvas.create_polygon(robot_corners, fill=robot_color, outline="#f0f6fc", width=3, tags="robot")
         
-        # Draw direction indicator (front of robot) - points in positive X direction
-        front_x = robot_canvas_x + cos_yaw * (robot_length/2 + 15)
-        front_y = robot_canvas_y + sin_yaw * (robot_length/2 + 15)
+        # Draw direction indicator (front of robot) - points in positive Y direction
+        # Robot front is in positive Y direction, so indicator should be at (0, robot_length/2 + 15)
+        # Note: GUI canvas Y-axis points down, so we need to negate the Y component
+        front_x = robot_canvas_x + cos_yaw * 0 - sin_yaw * (robot_length/2 + 15)
+        front_y = robot_canvas_y - (sin_yaw * 0 + cos_yaw * (robot_length/2 + 15))
         self.canvas.create_oval(front_x-8, front_y-8, front_x+8, front_y+8,
                               fill="#f85149", outline="#ff7b72", width=2, tags="robot")
         
@@ -447,8 +737,9 @@ class SpotSimulationGUI:
         
         # Draw carried object
         if self.has_object:
-            carried_x = robot_canvas_x + cos_yaw * 25
-            carried_y = robot_canvas_y + sin_yaw * 25
+            # Carried object should be in front of robot (positive Y direction)
+            carried_x = robot_canvas_x + cos_yaw * 0 - sin_yaw * 25
+            carried_y = robot_canvas_y - (sin_yaw * 0 + cos_yaw * 25)
             self.canvas.create_oval(carried_x-8, carried_y-8, carried_x+8, carried_y+8,
                                   fill="#d2a8ff", outline="#f0f6fc", width=2, tags="robot")
             self.canvas.create_text(carried_x, carried_y+20, text="OBJ", font=("Arial", 10, "bold"), fill="#f0f6fc", tags="robot")
@@ -463,14 +754,16 @@ class SpotSimulationGUI:
             arm_length = 0
         elif self.arm_status == "carry":
             # Gripper at front edge of robot when in carry position
-            gripper_x = robot_x + cos_yaw * (robot_length/2 - 10)
-            gripper_y = robot_y + sin_yaw * (robot_length/2 - 10)
+            # Robot front is in positive Y direction, so gripper should be at (0, robot_length/2 - 10)
+            gripper_x = robot_x + cos_yaw * 0 - sin_yaw * (robot_length/2 - 10)
+            gripper_y = robot_y - (sin_yaw * 0 + cos_yaw * (robot_length/2 - 10))
             gripper_size = 10
             arm_length = robot_length/2 - 10
         else:  # extended, grasping, etc.
             # Gripper extended further from robot body
-            gripper_x = robot_x + cos_yaw * (robot_length/2 + 30)
-            gripper_y = robot_y + sin_yaw * (robot_length/2 + 30)
+            # Robot front is in positive Y direction, so gripper should be at (0, robot_length/2 + 30)
+            gripper_x = robot_x + cos_yaw * 0 - sin_yaw * (robot_length/2 + 30)
+            gripper_y = robot_y - (sin_yaw * 0 + cos_yaw * (robot_length/2 + 30))
             gripper_size = 12
             arm_length = robot_length/2 + 30
         
@@ -503,6 +796,21 @@ class SpotSimulationGUI:
             self.canvas.create_oval(gripper_x - 3, gripper_y - 3, gripper_x + 3, gripper_y + 3,
                                   fill="#f85149", outline="#f0f6fc", width=1, tags="robot")
     
+    def _convert_grid_to_xy(self, locations):
+        """Convert grid coordinates (row, col) to x,y coordinates for GUI display."""
+        converted = {}
+        for name, data in locations.items():
+            converted_data = data.copy()
+            if "row" in data and "col" in data:
+                # Convert grid coordinates to x,y (30cm per cell)
+                converted_data["x"] = data["col"] * 0.3
+                converted_data["y"] = data["row"] * 0.3
+                # Remove grid coordinates
+                converted_data.pop("row", None)
+                converted_data.pop("col", None)
+            converted[name] = converted_data
+        return converted
+    
     def _create_dynamic_objects(self):
         """Create dynamic objects based on world configuration without generic placeholders."""
         objects = {}
@@ -513,24 +821,23 @@ class SpotSimulationGUI:
         color_idx = 0
         
         for waypoint_name, waypoint_data in waypoints.items():
-            if waypoint_data.get("pick_yaw") is None:
+            if waypoint_data.get("pick_direction") is None:
                 continue
-            x = waypoint_data["x"]
-            y = waypoint_data["y"]
+            row = waypoint_data["row"]
+            col = waypoint_data["col"]
             
             # Get specific object names based on waypoint category (PICKUP_* keys)
             object_names = self._get_objects_for_category(waypoint_name)
             
             # Only place real items; if none are defined for this category, skip
             for i in range(min(3, len(object_names))):
-                offset_x = (i - 1) * 0.35
-                offset_y = ((i % 2) * 0.3) - 0.15
+                # Place all objects in the same cell as the waypoint
                 obj_name = object_names[i]
                 obj_color = colors[color_idx % len(colors)]
                 
                 objects[obj_name] = {
-                    "x": x + offset_x,
-                    "y": y + offset_y,
+                    "row": row,  # Same row as waypoint
+                    "col": col,  # Same col as waypoint
                     "present": True,
                     "color": obj_color,
                     "waypoint": waypoint_name
@@ -572,6 +879,7 @@ class SpotSimulationGUI:
             "PICKUP_HANDTOOLS": ["hammer", "tape_measure", "chisel"],
             "PICKUP_LUMBER": ["wood_plank", "timber_beam", "plywood_sheet"],
             "PICKUP_SAFETY_HELMETS": ["hard_hat", "safety_vest", "ear_protectors"],
+            "PICKUP_MAZE_ITEM": ["maze package"],
         }
         return list(objects_by_category.get(name, []))
 
@@ -688,6 +996,10 @@ class SpotSimulationGUI:
             self.waypoints = self.world_config.get("waypoints", {})
             self.zones = self.world_config.get("zones", {})
             
+            # Convert grid coordinates to x,y coordinates for GUI
+            self.waypoints = self._convert_grid_to_xy(self.waypoints)
+            self.zones = self._convert_grid_to_xy(self.zones)
+            
             # Update objects
             self.objects = self._create_dynamic_objects()
             
@@ -707,8 +1019,8 @@ class SpotSimulationGUI:
     def setup_headless_mode(self):
         """Setup headless mode with minimal state tracking"""
         # Robot state
-        self.robot_x = 0.0
-        self.robot_y = 0.0
+        self.robot_x = 1.35  # Center of cell (4,4)
+        self.robot_y = 1.35
         self.robot_yaw = 0.0  # Robot starts facing forward (X direction)
         self.robot_state = "unknown"
         self.current_action = "idle"
@@ -726,6 +1038,9 @@ class SpotSimulationGUI:
         
         # Use zones from world configuration for drop-off locations
         self.zones = self.world_config.get("zones", {})
+        
+        # Convert grid coordinates to x,y coordinates for GUI
+        self.zones = self._convert_grid_to_xy(self.zones)
         
         # ROS subscribers for state tracking
         self.sub_robot_state = rospy.Subscriber('/spot_entrance/robot_state', String, self.on_robot_state_headless)
@@ -811,13 +1126,39 @@ class SpotSimulationGUI:
     def on_nl_position_update(self, msg):
         """Handle position updates from NL_Control"""
         try:
-            # Parse position from NL_Control
+            # Parse position from NL_Control (grid format)
             import json
             position_data = json.loads(msg.data)
-            self.robot_x = position_data['x']
-            self.robot_y = position_data['y'] 
-            self.robot_yaw = position_data['yaw']
-            rospy.loginfo(f"Updated robot position from NL_Control: ({self.robot_x:.2f}, {self.robot_y:.2f}, {self.robot_yaw:.2f})")
+            
+            # Convert grid coordinates to GUI coordinates
+            if 'row' in position_data and 'col' in position_data:
+                # Grid format: row, col, facing
+                self.robot_row = position_data['row']
+                self.robot_col = position_data['col']
+                self.robot_facing = position_data.get('facing', 'N')
+                
+                # Convert grid cell to meter coordinates (center of cell)
+                # Cell (4,4) should be at (0.3 * 4.5, 0.3 * 4.5) = (1.35, 1.35)
+                self.robot_x = (float(self.robot_col) + 0.5) * 0.3
+                self.robot_y = (float(self.robot_row) + 0.5) * 0.3
+                    
+                # Prefer explicit yaw from NL if available; otherwise map from facing
+                try:
+                    if 'yaw_deg' in position_data:
+                        import math as _m
+                        self.robot_yaw = float(position_data['yaw_deg']) * _m.pi / 180.0
+                    else:
+                        # Cardinal mapping per system convention: N=0, E=-pi/2, W=+pi/2, S=pi
+                        direction_to_yaw = {'N': 0.0, 'E': -1.57, 'S': 3.14, 'W': 1.57}
+                        self.robot_yaw = direction_to_yaw.get(self.robot_facing, 0.0)
+                except Exception:
+                    self.robot_yaw = 0.0
+                
+            elif 'x' in position_data and 'y' in position_data:
+                # Legacy x,y,yaw format
+                self.robot_x = position_data['x']
+                self.robot_y = position_data['y'] 
+                self.robot_yaw = position_data['yaw']
         except Exception as e:
             rospy.logwarn(f"Failed to parse NL_Control position: {e}")
 
@@ -827,6 +1168,16 @@ class SpotSimulationGUI:
             feedback = msg.data
             
             with self.update_lock:
+                # Mirror standalone: reflect feedback lines in NL panel
+                _append_feedback_line = self._update_feedback_text
+                
+                # Show general pre/post LLM messages in UI too
+                if feedback.startswith("[exec]"):
+                    # Strip prefix for readability
+                    clean = feedback.replace("[exec]", "").strip()
+                    if ("Sending command to LLM" in clean) or ("LLM generated" in clean):
+                        _append_feedback_line(clean)
+
                 # Parse different types of feedback
                 if "[exec] Step" in feedback:
                     # Extract action from step feedback
@@ -850,6 +1201,8 @@ class SpotSimulationGUI:
                                 rospy.loginfo(f"Robot moved by ({body_x}, {body_y}, {body_yaw}) in body frame")
                         except Exception as e:
                             rospy.logwarn(f"Failed to parse movement parameters: {e}")
+                        # Append a friendly line
+                        _append_feedback_line("Executing movement")
                             
                     elif "start_automated_grasp" in feedback:
                         self.current_action = "grasping"
@@ -867,12 +1220,17 @@ class SpotSimulationGUI:
                         
                         # Check if there's an object at current location to grasp
                         self.simulate_grasp_attempt(target_object)
+                        if target_object:
+                            _append_feedback_line(f"Attempting to grasp {target_object}")
+                        else:
+                            _append_feedback_line("Attempting to grasp object")
                         
                     elif "start_drop_off" in feedback:
                         # Handle drop-off sequence: extend arm, open gripper, drop object, close, stow
                         self.current_action = "dropping_off"
                         self.arm_status = "extended"
                         rospy.loginfo("GUI: Simulating drop-off sequence")
+                        _append_feedback_line("Starting drop-off sequence")
                         # Simulate the full sequence
                         import threading
                         def simulate_drop_off_sequence():
@@ -909,9 +1267,18 @@ class SpotSimulationGUI:
                     # Action completed
                     if self.current_action == "moving":
                         self.current_action = "idle"
+                        _append_feedback_line("Movement completed")
                     elif self.current_action == "grasping":
                         self.current_action = "idle"
+                        _append_feedback_line("Grasping completed")
                         
+                # Plan lifecycle and errors
+                if "Plan completed successfully" in feedback:
+                    _append_feedback_line("Plan execution completed successfully!")
+                    _append_feedback_line("Ready for new commands")
+                if "Command parsing failed" in feedback:
+                    _append_feedback_line("Command could not be understood")
+                    _append_feedback_line("Please try rephrasing your command")
         except Exception as e:
             rospy.logwarn(f"Failed to parse execution feedback: {e}")
     
@@ -953,7 +1320,10 @@ class SpotSimulationGUI:
                            target_lower in obj_lower.split(' '))
                 
                 if obj_data["present"] and is_match:
-                    distance = math.sqrt((self.robot_x - obj_data["x"])**2 + (self.robot_y - obj_data["y"])**2)
+                    # Convert object grid coordinates to world coordinates
+                    obj_x = obj_data["col"] * 0.3  # Convert col to x meters
+                    obj_y = obj_data["row"] * 0.3  # Convert row to y meters
+                    distance = math.sqrt((self.robot_x - obj_x)**2 + (self.robot_y - obj_y)**2)
                     if distance <= grasp_distance:
                         # Successful grasp of target object
                         obj_data["present"] = False
@@ -966,7 +1336,10 @@ class SpotSimulationGUI:
         # Fallback: grasp any object within range
         for obj_name, obj_data in self.objects.items():
             if obj_data["present"]:
-                distance = math.sqrt((self.robot_x - obj_data["x"])**2 + (self.robot_y - obj_data["y"])**2)
+                # Convert object grid coordinates to world coordinates
+                obj_x = obj_data["col"] * 0.3  # Convert col to x meters
+                obj_y = obj_data["row"] * 0.3  # Convert row to y meters
+                distance = math.sqrt((self.robot_x - obj_x)**2 + (self.robot_y - obj_y)**2)
                 if distance <= grasp_distance:
                     # Successful grasp
                     obj_data["present"] = False
@@ -984,9 +1357,9 @@ class SpotSimulationGUI:
             min_distance = float('inf')
             
             for zone_name, zone_data in self.zones.items():
-                centroid = zone_data["centroid"]
-                zone_x = centroid["x"]
-                zone_y = centroid["y"]
+                # Zones are already converted to x,y coordinates
+                zone_x = zone_data["x"]
+                zone_y = zone_data["y"]
                 distance = math.sqrt((self.robot_x - zone_x)**2 + (self.robot_y - zone_y)**2)
                 
                 if distance < min_distance:
@@ -996,8 +1369,8 @@ class SpotSimulationGUI:
             # Check if robot is near any drop-off zone
             if nearest_zone and min_distance <= 1.0:  # Within 1m of drop-off zone
                 # Drop object at the nearest drop-off zone
-                drop_x = nearest_zone["centroid"]["x"]
-                drop_y = nearest_zone["centroid"]["y"]
+                drop_x = nearest_zone["x"]
+                drop_y = nearest_zone["y"]
                 rospy.loginfo(f"Dropping {self.carried_object_name} at drop-off zone ({drop_x:.2f}, {drop_y:.2f})")
             else:
                 # Drop object at current robot location
@@ -1007,9 +1380,12 @@ class SpotSimulationGUI:
             
             # Create dropped object
             object_name = self.carried_object_name if self.carried_object_name else "dropped_object"
+            # Convert world coordinates back to grid coordinates for consistency
+            drop_row = int(round(drop_y / 0.3))  # Convert y to row
+            drop_col = int(round(drop_x / 0.3))  # Convert x to col
             dropped_obj = {
-                "x": drop_x,
-                "y": drop_y,
+                "row": drop_row,
+                "col": drop_col,
                 "present": True,
                 "color": "#d2a8ff"  # Purple color for dropped objects
             }
@@ -1021,8 +1397,8 @@ class SpotSimulationGUI:
         """Reset the simulation to initial state"""
         with self.update_lock:
             # Reset robot position and state
-            self.robot_x = 0.0
-            self.robot_y = 0.0
+            self.robot_x = 1.35  # Center of cell (4,4)
+            self.robot_y = 1.35
             self.robot_yaw = 0.0  # Robot starts facing forward (X direction)
             self.robot_state = "stand"
             self.current_action = "idle"
@@ -1114,13 +1490,11 @@ class SpotSimulationGUI:
             interpretation = msg.data.strip()
             if interpretation:
                 rospy.loginfo(f"GUI: Received interpretation: {interpretation}")
-                # Update feedback text with only natural language interpretation
-                self.feedback_text.config(state=tk.NORMAL)
-                self.feedback_text.delete(1.0, tk.END)
-                
-                # Add only the interpretation, no coordinate system info
-                self.feedback_text.insert(tk.END, interpretation)
-                self.feedback_text.config(state=tk.DISABLED)
+                # Append to history like standalone
+                self._update_feedback_text("Plan generated:")
+                for line in interpretation.split('\n'):
+                    if line.strip():
+                        self._update_feedback_text(line.strip())
                 
                 # Enable approve/decline buttons when interpretation is received
                 self.approve_button.config(state='normal')

@@ -64,6 +64,10 @@ class SpotSharedServices:
         self.dummy_mode = getattr(robot_manager, 'dummy_mode', False)
         self.cv_bridge = CvBridge()
         
+        # Grid position tracking for dummy mode (30cm per cell)
+        self.current_cell = [4, 4]  # [row, col] - start in middle of 10x10 grid
+        self.facing = "N"  # Current facing direction (N/S/E/W)
+        
         # Setup robot operation services
         self.srv_get_image = rospy.Service('~get_image', GetImage, self.handle_get_image)
         self.srv_get_initial_pose = rospy.Service('~get_initial_pose', GetInitialPose, self.handle_get_initial_pose)
@@ -72,7 +76,7 @@ class SpotSharedServices:
         self.srv_arm_command = rospy.Service('~arm_command', ArmCommand, self.handle_arm_command)
         
         if self.dummy_mode:
-            rospy.loginfo("Spot shared services initialized in DUMMY MODE")
+            rospy.loginfo("Spot shared services initialized in DUMMY MODE with grid tracking")
         else:
             rospy.loginfo("Spot shared services initialized")
     
@@ -169,6 +173,38 @@ class SpotSharedServices:
         """Return current robot pose in ODOM frame and end-effector pose in body frame."""
         response = GetRobotPoseResponse()
 
+        # Handle dummy mode with grid coordinates
+        if self.dummy_mode:
+            # Convert grid cell to vision frame coordinates
+            x = self.current_cell[1] * 0.3  # col * 30cm
+            y = self.current_cell[0] * 0.3  # row * 30cm
+            
+            # Convert facing direction to yaw
+            direction_to_yaw = {
+                'N': 1.57,   # 90 degrees
+                'S': -1.57,  # -90 degrees
+                'E': 0.0,    # 0 degrees
+                'W': 3.14    # 180 degrees
+            }
+            yaw = direction_to_yaw.get(self.facing, 0.0)
+            
+            # Create pose from grid position
+            robot_pose = PoseStamped()
+            robot_pose.header.frame_id = VISION_FRAME_NAME
+            robot_pose.header.stamp = rospy.Time.now()
+            robot_pose.pose.position.x = x
+            robot_pose.pose.position.y = y
+            robot_pose.pose.position.z = 0.0
+            robot_pose.pose.orientation.x = 0.0
+            robot_pose.pose.orientation.y = 0.0
+            robot_pose.pose.orientation.z = yaw
+            robot_pose.pose.orientation.w = 1.0
+            
+            response.success = True
+            response.robot_pose = robot_pose
+            response.message = f"Robot at grid cell {self.current_cell}, facing {self.facing} (dummy)"
+            return response
+
         try:
             clients = self.robot_manager.get_clients()
             if not clients or not clients.get('robot_state'):
@@ -247,9 +283,32 @@ class SpotSharedServices:
             # Extract movement parameters
             x = req.target_pose.position.x
             y = req.target_pose.position.y
+            yaw = req.target_pose.orientation.z  # Extract yaw from quaternion
             frame = req.frame_name or "body"
             
-            rospy.loginfo(f"[DUMMY] Moving to position x={x:.2f}, y={y:.2f} in {frame} frame...")
+            # Check if this is a grid-based movement (vision frame with 30cm increments)
+            if frame == "vision" and abs(x % 0.3) < 0.01 and abs(y % 0.3) < 0.01:
+                # Convert meters back to grid cells for tracking
+                new_col = round(x / 0.3)
+                new_row = round(y / 0.3)
+                
+                # Update grid position
+                old_cell = self.current_cell.copy()
+                self.current_cell = [new_row, new_col]
+                
+                # Update facing direction based on yaw
+                if abs(yaw - 1.57) < 0.1:  # ~90 degrees
+                    self.facing = "N"
+                elif abs(yaw + 1.57) < 0.1:  # ~-90 degrees
+                    self.facing = "S"
+                elif abs(yaw) < 0.1:  # ~0 degrees
+                    self.facing = "E"
+                elif abs(yaw - 3.14) < 0.1:  # ~180 degrees
+                    self.facing = "W"
+                
+                rospy.loginfo(f"[DUMMY] Grid movement from cell {old_cell} to cell {self.current_cell}, now facing {self.facing}")
+            else:
+                rospy.loginfo(f"[DUMMY] Continuous movement to position x={x:.2f}, y={y:.2f} in {frame} frame...")
             
             # Simulate movement time based on distance
             distance = (x**2 + y**2)**0.5
@@ -368,6 +427,14 @@ class SpotSharedServices:
         response = ArmCommandResponse()
         
         try:
+            # Handle dummy mode
+            if self.dummy_mode:
+                rospy.loginfo(f"DUMMY MODE - Simulating arm command: {req.command_type}")
+                rospy.sleep(1.0)  # Simulate arm movement time
+                response.success = True
+                response.message = f"Arm command '{req.command_type}' simulated successfully (dummy)"
+                return response
+            
             clients = self.robot_manager.get_clients()
             if not clients or not clients['command']:
                 response.success = False

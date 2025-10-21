@@ -34,6 +34,7 @@ class SpotStateMachine(StateMachine):
     sit = State()
     stand = State()
     moving = State()
+    rotating = State()  # New state for grid-based rotation
     grasping = State()
     carry = State()
     move_arm_pose = State()
@@ -48,18 +49,20 @@ class SpotStateMachine(StateMachine):
     connect = disconnected.to(connected)
     power_on = connected.to(powered_off)
     stand_up = (powered_off.to(stand) | sit.to(stand))
-    sit_down = (stand.to(sit) | moving.to(sit) | grasping.to(sit))
+    sit_down = (stand.to(sit) | moving.to(sit) | rotating.to(sit) | grasping.to(sit))
     start_moving = (stand.to(moving) | moving.to(moving) | carry.to(moving))
     stop_moving = moving.to(stand)
-    get_image = (stand.to(stand) | moving.to(moving) | sit.to(sit))
-    get_initial_pose = (stand.to(stand) | moving.to(moving) | sit.to(sit))
-    start_arm_command = (stand.to(arm_command) | moving.to(arm_command) | carry.to(arm_command))
+    start_rotating = (stand.to(rotating) | rotating.to(rotating) | carry.to(rotating) | moving.to(rotating))  # New grid-based rotation
+    stop_rotating = rotating.to(stand)
+    get_image = (stand.to(stand) | moving.to(moving) | rotating.to(rotating) | sit.to(sit))
+    get_initial_pose = (stand.to(stand) | moving.to(moving) | rotating.to(rotating) | sit.to(sit))
+    start_arm_command = (stand.to(arm_command) | moving.to(arm_command) | rotating.to(arm_command) | carry.to(arm_command))
     finish_arm_command = (arm_command.to(stand))
-    start_automated_grasp = (stand.to(grasping) | moving.to(grasping))
+    start_automated_grasp = (stand.to(grasping) | moving.to(grasping) | rotating.to(grasping))
     finish_automated_grasp = (grasping.to(carry))
-    start_move_arm_pose = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | carry.to(move_arm_pose))
+    start_move_arm_pose = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | rotating.to(move_arm_pose) | carry.to(move_arm_pose))
     finish_move_arm_pose = (move_arm_pose.to(stand))
-    start_drop_off = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | carry.to(move_arm_pose))
+    start_drop_off = (stand.to(move_arm_pose) | moving.to(move_arm_pose) | rotating.to(move_arm_pose) | carry.to(move_arm_pose))
     finish_drop_off = (move_arm_pose.to(stand))
     carry_to_stand = carry.to(stand)
     stand_to_carry = stand.to(carry)
@@ -126,6 +129,15 @@ class SpotStateMachine(StateMachine):
         self.move_y = 0.0
         self.move_yaw = 0.0
         self.move_frame = "vision"
+
+        # Grid origin alignment for real mode: ensure first real pose maps to GUI start cell
+        # GUI defaults to start at cell (4,4); allow override via params
+        self.grid_start_row = rospy.get_param('/nl_control/start_cell_row', 4)
+        self.grid_start_col = rospy.get_param('/nl_control/start_cell_col', 4)
+        self._grid_origin_x = None
+        self._grid_origin_y = None
+        # Yaw origin: normalize initial heading to 0 at startup
+        self._yaw_origin = None
 
     def _startup_probe(self, timeout=3.0):
         """Check `/spot_entrance/robot_state` and align FSM to the most specific state."""
@@ -210,15 +222,38 @@ class SpotStateMachine(StateMachine):
     def on_enter_moving(self):
         # Get parameters from kwargs if available, otherwise use stored ones
         kwargs = getattr(self, '_current_kwargs', {})
-        move_x = kwargs.get('x', self.move_x)
-        move_y = kwargs.get('y', self.move_y)
-        move_yaw = kwargs.get('yaw', self.move_yaw)
-        move_frame = kwargs.get('frame', self.move_frame)
         
-        rospy.loginfo(f"FSM: Moving x={move_x}, y={move_y}, yaw={move_yaw}")
-        recorder.publish_event('start_moving')
-        result = self._call_move_service(move_x, move_y, move_yaw, move_frame)
-        recorder.publish_event('stop_moving')
+        # Check if this is a grid-based movement (row/col) or continuous (x/y)
+        if 'row' in kwargs and 'col' in kwargs:
+            # Grid-based movement: use new grid conversion method
+            row = kwargs.get('row', 0)
+            col = kwargs.get('col', 0)
+            
+            recorder.publish_event('start_moving')
+            result = self._call_move_to_cell(row, col)
+            recorder.publish_event('stop_moving')
+        else:
+            # Continuous movement (legacy support)
+            move_x = kwargs.get('x', self.move_x)
+            move_y = kwargs.get('y', self.move_y)
+            move_yaw = kwargs.get('yaw', self.move_yaw)
+            move_frame = kwargs.get('frame', self.move_frame)
+            
+            rospy.loginfo(f"FSM: Continuous movement x={move_x}, y={move_y}, yaw={move_yaw}")
+            
+            recorder.publish_event('start_moving')
+            result = self._call_move_service(move_x, move_y, move_yaw, move_frame)
+            recorder.publish_event('stop_moving')
+    
+    def on_enter_rotating(self):
+        # Handle grid-based rotation to cardinal directions
+        kwargs = getattr(self, '_current_kwargs', {})
+        direction = kwargs.get('direction', 'N')
+        
+        rospy.loginfo(f"FSM: Rotating to face {direction}")
+        recorder.publish_event('start_rotating')
+        result = self._call_rotate_to(direction)
+        recorder.publish_event('stop_rotating')
     
     def on_enter_get_image(self):
         # Get image source from kwargs, default to frontleft_fisheye_image
@@ -393,7 +428,15 @@ class SpotStateMachine(StateMachine):
         # TODO: remove return to initial_pose 
         if self.dummy_mode:
             rospy.loginfo(f"FSM: DUMMY MODE - Simulating automated grasp for {object_type}")
-            rospy.sleep(2.0)  # Simulate time for grasp in dummy mode
+            
+            # Simulate object detection and grasping process
+            rospy.sleep(1.0)  # Simulate detection time
+            
+            # In dummy mode, we'll assume the object is found and grasped
+            # This matches the standalone behavior where objects are always available
+            rospy.loginfo(f"FSM: DUMMY MODE - Object {object_type} detected and grasped")
+            rospy.sleep(1.0)  # Simulate grasp time
+            
             return True
             
         try:
@@ -581,6 +624,158 @@ class SpotStateMachine(StateMachine):
             mode_text = " (dummy)" if self.dummy_mode else ""
             rospy.logerr(f"FSM: Move service call failed{mode_text}: {e}")
             return False
+
+    def _grid_to_body_frame(self, target_row, target_col):
+        """Convert grid coordinates to body-frame movement for real robot."""
+        # Grid cell size: 0.3m per cell
+        cell_size = 0.3
+        
+        # Get current robot pose to calculate relative movement
+        current_pose = self.get_robot_pose()
+        if not current_pose:
+            rospy.logerr("FSM: Cannot get current robot pose for grid conversion")
+            return None, None, None
+        
+        # Convert current pose to grid coordinates
+        # Service returns a GetRobotPoseResponse with PoseStamped at response.robot_pose
+        try:
+            current_x = current_pose.robot_pose.pose.position.x
+            current_y = current_pose.robot_pose.pose.position.y
+        except Exception:
+            rospy.logwarn("FSM: Unexpected robot pose format; using zeros for dx/dy")
+            current_x, current_y = 0.0, 0.0
+        # Initialize grid origin on first use so current real pose maps to configured start cell
+        if self._grid_origin_x is None or self._grid_origin_y is None:
+            self._grid_origin_x = current_x - (self.grid_start_col * cell_size)
+            self._grid_origin_y = current_y - (self.grid_start_row * cell_size)
+            rospy.loginfo(f"FSM: Grid origin set to ({self._grid_origin_x:.2f},{self._grid_origin_y:.2f}) so current pose maps to cell ({self.grid_start_row},{self.grid_start_col})")
+
+        # Compute current grid cell using fixed origin
+        current_col = round((current_x - self._grid_origin_x) / cell_size)
+        current_row = round((current_y - self._grid_origin_y) / cell_size)
+        
+        # Calculate target position in meters
+        target_x = (target_col * cell_size) + self._grid_origin_x
+        target_y = (target_row * cell_size) + self._grid_origin_y
+        
+        # Calculate relative movement in vision frame
+        dx_v = target_x - current_x
+        dy_v = target_y - current_y
+
+        # Transform vision-frame delta into body frame using current yaw
+        try:
+            import tf.transformations as tft
+            qx = current_pose.robot_pose.pose.orientation.x
+            qy = current_pose.robot_pose.pose.orientation.y
+            qz = current_pose.robot_pose.pose.orientation.z
+            qw = current_pose.robot_pose.pose.orientation.w
+            _, _, yaw = tft.euler_from_quaternion((qx, qy, qz, qw))
+        except Exception:
+            yaw = 0.0
+
+        cos_y = math.cos(-yaw)
+        sin_y = math.sin(-yaw)
+        dx_b = cos_y * dx_v - sin_y * dy_v
+        dy_b = sin_y * dx_v + cos_y * dy_v
+        
+        rospy.loginfo(f"FSM: Grid movement: ({current_row},{current_col}) -> ({target_row},{target_col})")
+        rospy.loginfo(f"FSM: Vision delta: dx={dx_v:.2f}m, dy={dy_v:.2f}m; Body delta: dx={dx_b:.2f}m (forward +), dy={dy_b:.2f}m (left +)")
+        
+        return dx_b, dy_b, 0.0  # No yaw change for move_to_cell
+
+    def _direction_to_yaw(self, direction):
+        """Convert cardinal direction to yaw angle."""
+        direction_map = {
+            # Convention per user:
+            # North (forward) = 0
+            # East (right) = -pi/2
+            # West (left) = +pi/2
+            # South (back) = pi
+            'N': 0.0,
+            'E': -math.pi / 2,
+            'W': math.pi / 2,
+            'S': math.pi
+        }
+        return direction_map.get(direction, 0.0)
+
+    def _call_move_to_cell(self, row, col):
+        """Handle move_to_cell command with grid-to-body-frame conversion."""
+        if self.dummy_mode:
+            # In dummy mode, just simulate the movement
+            rospy.loginfo(f"FSM: Dummy move_to_cell to ({row}, {col})")
+            rospy.sleep(2.0)  # Simulate movement time
+            return True
+        else:
+            # Convert grid delta to body-frame relative movement (x forward +, y left +)
+            cell_size = 0.3
+            current_pose = self.get_robot_pose()
+            if not current_pose:
+                rospy.logerr("FSM: Cannot get current robot pose for grid conversion")
+                return False
+
+            try:
+                current_x = current_pose.robot_pose.pose.position.x
+                current_y = current_pose.robot_pose.pose.position.y
+            except Exception:
+                current_x, current_y = 0.0, 0.0
+
+            # Initialize grid origin if needed (so current pose aligns to configured start cell)
+            if self._grid_origin_x is None or self._grid_origin_y is None:
+                self._grid_origin_x = current_x - (self.grid_start_col * cell_size)
+                self._grid_origin_y = current_y - (self.grid_start_row * cell_size)
+                rospy.loginfo(f"FSM: Grid origin set to ({self._grid_origin_x:.2f},{self._grid_origin_y:.2f}) so current pose maps to cell ({self.grid_start_row},{self.grid_start_col})")
+
+            current_col = round((current_x - self._grid_origin_x) / cell_size)
+            current_row = round((current_y - self._grid_origin_y) / cell_size)
+
+            drow = row - current_row
+            dcol = col - current_col
+
+            # Map grid deltas to body-frame deltas: forward (row-1) => +x; right (col+1) => -y
+            dx_b = (-drow) * cell_size
+            dy_b = (-dcol) * cell_size
+
+            rospy.loginfo(f"FSM: Grid movement: ({current_row},{current_col}) -> ({row},{col}) => drow={drow}, dcol={dcol}")
+            rospy.loginfo(f"FSM: Body-frame delta: dx={dx_b:.2f}m (forward +), dy={dy_b:.2f}m (left +)")
+
+            return self._call_move_service(x=dx_b, y=dy_b, yaw=0.0, frame="body")
+
+    def _call_rotate_to(self, direction):
+        """Handle rotate_to command with direction-to-yaw conversion."""
+        if self.dummy_mode:
+            # In dummy mode, just simulate the rotation
+            rospy.loginfo(f"FSM: Dummy rotate_to {direction}")
+            rospy.sleep(1.0)  # Simulate rotation time
+            return True
+        else:
+            # Compute relative yaw needed from current yaw to target cardinal
+            try:
+                pose_resp = self.get_robot_pose()
+                qx = pose_resp.robot_pose.pose.orientation.x
+                qy = pose_resp.robot_pose.pose.orientation.y
+                qz = pose_resp.robot_pose.pose.orientation.z
+                qw = pose_resp.robot_pose.pose.orientation.w
+                import tf.transformations as tft
+                _, _, current_yaw = tft.euler_from_quaternion((qx, qy, qz, qw))
+            except Exception:
+                current_yaw = 0.0
+
+            # Initialize yaw origin so startup heading is treated as 0
+            if self._yaw_origin is None:
+                self._yaw_origin = current_yaw
+                rospy.loginfo(f"FSM: Yaw origin set to {self._yaw_origin:.2f} rad (startup heading -> 0)")
+
+            # Work in yaw relative to origin
+            current_rel = math.atan2(math.sin(current_yaw - self._yaw_origin), math.cos(current_yaw - self._yaw_origin))
+            desired_rel = self._direction_to_yaw(direction)
+            delta = desired_rel - current_rel
+            # Normalize to [-pi, pi]
+            delta = math.atan2(math.sin(delta), math.cos(delta))
+
+            rospy.loginfo(f"FSM: Rotating (rel): current={current_rel:.2f} -> desired={desired_rel:.2f} (delta={delta:.2f}) for {direction}")
+
+            # Use body frame for relative rotation
+            return self._call_move_service(x=0.0, y=0.0, yaw=delta, frame="body")
 
 
 if __name__ == "__main__":
