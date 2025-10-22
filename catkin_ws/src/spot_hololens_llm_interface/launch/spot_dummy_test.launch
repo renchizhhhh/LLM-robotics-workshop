@@ -12,8 +12,7 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     <arg name="dummy_mode" default="false" />
     <arg name="hostname" default="192.168.1.109" />
     <arg name="model_choice" default="oss" />
-    <!-- Control whether to display simulation GUI (independent of dummy mode) -->
-    <arg name="show_gui" default="true" />
+
     <!-- Dummy Estop ROS node - provides estop services without real robot -->
     <node
         pkg="spot_hololens_llm_interface"
@@ -33,27 +32,11 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
         <param name="verbose" value="$(arg verbose)"/>
     </node>
 
-    <!-- Natural Language Control (works for both dummy and real modes) -->
-    <node name="nl_control_gemini" pkg="spot_hololens_llm_interface" type="nl_control_gemini.py" output="screen">
-        <param name="dummy_mode" value="$(arg dummy_mode)"/>
-    </node>
-    
-    
     <!-- orchestra in dummy mode - DISABLED to prevent conflicts with nl_control -->
     <!-- <node name="spot_orchestrator" pkg="spot_hololens_llm_interface" type="experiment_orchestrator.py" output="screen">
         <param name="dummy_mode" value="$(arg dummy_mode)"/>
         <param name="mode" value="HA"/>
     </node> -->
-
-    <!-- Spot Robot Simulation GUI (can be enabled in real mode via show_gui) -->
-    <node if="$(arg show_gui)" name="spot_simulation_gui" pkg="spot_hololens_llm_interface" type="spot_simulation_gui.py" output="screen">
-    </node>
-
-    <!-- Natural Language Control for dummy mode (Grid-Based) -->
-    <node if="$(arg dummy_mode)" name="nl_control" pkg="spot_hololens_llm_interface" type="nl_control_gemini.py" output="screen" args="--speech">
-        <param name="world_id" value="1"/>
-        <param name="model_choice" value="$(arg model_choice)"/>
-    </node>
 
     <!-- HoloLens Unity ROS TCP Endpoint -->
     <arg name="tcp_ip" default="0.0.0.0"/>
