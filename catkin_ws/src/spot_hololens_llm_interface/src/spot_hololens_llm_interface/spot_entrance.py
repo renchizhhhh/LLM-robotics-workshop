@@ -83,7 +83,7 @@ class SpotRobotManager:
         self.pub_robot_state = rospy.Publisher('~robot_state', String, queue_size=1)
         
         # Status publisher timer
-        self.status_timer = rospy.Timer(rospy.Duration(1.0), self.publish_status)
+        self.status_timer = rospy.Timer(rospy.Duration(nsecs=100000000), self.publish_status)
         
         # Initialize shared services
         if start_services:
