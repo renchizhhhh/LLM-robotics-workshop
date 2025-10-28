@@ -8,12 +8,25 @@
 """A small ROS node wrapper for the Spot estop keep-alive.
 
 Provides services:
-  /estop/stop             (std_srvs/Trigger) -> trigger estop (cut power)
-  /estop/allow            (std_srvs/Trigger) -> release estop (allow)
-  /estop/settle_then_cut  (std_srvs/Trigger) -> settle then cut
+    /estop/stop             (std_srvs/Trigger) -> trigger estop (cut power)
+    /estop/allow            (std_srvs/Trigger) -> release estop (allow)
+    /estop/settle_then_cut  (std_srvs/Trigger) -> settle then cut
 
 Publishes:
-  /estop/status (std_msgs/String) -> "NOT_STOPPED" / "STOPPED" / "ERROR"
+    /estop/status (std_msgs/String) -> "NOT_STOPPED" / "STOPPED" / "ERROR"
+
+Parameters:
+    ~hostname (str)                 Robot hostname/IP
+    ~timeout (float)                E-stop endpoint timeout seconds
+    ~dummy_mode (bool)              If true, do not connect to robot (simulated)
+    ~enable_estop (bool)            If false, do not configure/register a software e-stop
+    ~status_rate (float)            Publish rate for status topic (Hz)
+
+Notes:
+    - If motors are already ON, configuring a new e-stop endpoint will fail with
+        bosdyn.client.estop.MotorsOnError. This node will now gracefully continue in
+        "no-estop" mode (publishing status only) unless ~enable_estop is explicitly
+        required.
 """
 import os
 import rospy
@@ -21,7 +34,7 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger, TriggerResponse
 
 import bosdyn.client.util
-from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive
+from bosdyn.client.estop import EstopClient, EstopEndpoint, EstopKeepAlive, MotorsOnError
 from bosdyn.client.robot_state import RobotStateClient
 
 
@@ -39,8 +52,14 @@ class EstopRosNode(object):
     def __init__(self):
         rospy.init_node('estop_node')
         hostname = rospy.get_param('~hostname', rospy.get_param('hostname', None))
-        timeout = float(rospy.get_param('~timeout', rospy.get_param('timeout', 5.0)))
+        timeout_param = rospy.get_param('~timeout', rospy.get_param('timeout', 5.0))
+        try:
+            timeout = float(timeout_param)
+        except Exception:
+            rospy.logwarn("Invalid timeout param '%s', defaulting to 5.0", str(timeout_param))
+            timeout = 5.0
         dummy_mode = rospy.get_param('~dummy_mode', False)
+        enable_estop = rospy.get_param('~enable_estop', rospy.get_param('enable_estop', True))
         
         if dummy_mode:
             rospy.loginfo("Estop node starting in DUMMY MODE - no real robot connection")
@@ -59,19 +78,26 @@ class EstopRosNode(object):
             
             try:
                 # Use environment variables for authentication
-                username = os.getenv('SPOT_USERNAME', 'user')
-                password = os.getenv('SPOT_PASSWORD', 'corspotuser1')
+                username = os.getenv('SPOT_USERNAME')
+                password = os.getenv('SPOT_PASSWORD')
                 robot.authenticate(username, password)
                 rospy.loginfo("Estop node authenticated with robot using environment credentials")
             except Exception as e:
                 rospy.logwarn("Authentication with robot may have failed (exception: %s). Ensure credentials are available.", e)
 
             # Create keepalive & robot-state client
-            try:
-                self.estop_keep_alive, _ = make_estop_keepalive(robot, timeout, 'ROS E-Stop')
-            except Exception as e:
-                rospy.logerr("Failed to create estop endpoint: %s", e)
-                raise
+            self.estop_keep_alive = None
+            if enable_estop:
+                try:
+                    self.estop_keep_alive, _ = make_estop_keepalive(robot, timeout, 'ROS E-Stop')
+                except MotorsOnError as e:
+                    # In 3.3+, operating without software e-stop is allowed. Fall back.
+                    rospy.logwarn("E-stop setup skipped: motors are ON (%s). Continuing without software e-stop.", e)
+                except Exception as e:
+                    rospy.logerr("Failed to create estop endpoint: %s", e)
+                    # Do not crash entire node; continue without estop so we can still publish status.
+            else:
+                rospy.loginfo("~enable_estop is false: running without software e-stop")
 
             try:
                 self.state_client = robot.ensure_client(RobotStateClient.default_service_name)
@@ -88,7 +114,7 @@ class EstopRosNode(object):
         self.pub_status = rospy.Publisher('estop/status', String, queue_size=1)
 
         rospy.on_shutdown(self.on_shutdown)
-        rospy.loginfo("estop_node ready (hostname=%s timeout=%s)", hostname, timeout)
+        rospy.loginfo("estop_node ready (hostname=%s timeout=%s estop_enabled=%s)", hostname, timeout, self.estop_keep_alive is not None or self.dummy_mode)
 
         self.loop()
 
@@ -97,6 +123,9 @@ class EstopRosNode(object):
             rospy.loginfo("[DUMMY] Estop triggered (stopped)")
             return TriggerResponse(success=True, message="Estop triggered (stopped) - dummy mode")
         
+        if self.estop_keep_alive is None:
+            return TriggerResponse(success=False, message="Software e-stop not enabled or unavailable (motors may already be on).")
+
         try:
             self.estop_keep_alive.stop()
             return TriggerResponse(success=True, message="Estop triggered (stopped).")
@@ -108,6 +137,9 @@ class EstopRosNode(object):
             rospy.loginfo("[DUMMY] Estop released (allowed)")
             return TriggerResponse(success=True, message="Estop released (allowed) - dummy mode")
         
+        if self.estop_keep_alive is None:
+            return TriggerResponse(success=False, message="Software e-stop not enabled or unavailable (motors may already be on).")
+
         try:
             self.estop_keep_alive.allow()
             return TriggerResponse(success=True, message="Estop released (allowed).")
@@ -119,6 +151,9 @@ class EstopRosNode(object):
             rospy.loginfo("[DUMMY] Settle then cut issued")
             return TriggerResponse(success=True, message="Settle then cut issued - dummy mode")
         
+        if self.estop_keep_alive is None:
+            return TriggerResponse(success=False, message="Software e-stop not enabled or unavailable (motors may already be on).")
+
         try:
             self.estop_keep_alive.settle_then_cut()
             return TriggerResponse(success=True, message="Settle then cut issued.")
@@ -161,7 +196,15 @@ class EstopRosNode(object):
     def on_shutdown(self):
         rospy.loginfo("Shutting down estop_node, ending keep-alive.")
         try:
-            self.estop_keep_alive.end_periodic_check_in()
+            if self.estop_keep_alive is not None:
+                end_cb = getattr(self.estop_keep_alive, 'end_periodic_check_in', None)
+                if callable(end_cb):
+                    end_cb()
+                else:
+                    # Fallback for SDKs where the shutdown method name differs
+                    shutdown_cb = getattr(self.estop_keep_alive, 'shutdown', None)
+                    if callable(shutdown_cb):
+                        shutdown_cb()
         except Exception:
             # Best-effort
             pass

@@ -50,8 +50,8 @@ class SpotRobotManager:
             
             try:
                 # Use environment variables for authentication
-                username = os.getenv('SPOT_USERNAME', 'user')
-                password = os.getenv('SPOT_PASSWORD', 'corspotuser1')
+                username = os.getenv('SPOT_USERNAME')
+                password = os.getenv('SPOT_PASSWORD')
                 self.robot.authenticate(username, password)
                 rospy.loginfo("Spot entrance authenticated with robot using environment credentials")
             except Exception as e:
