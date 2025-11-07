@@ -543,26 +543,79 @@ class SpotGraspActionServer:
     
     def _detect_object_center_direct(self, img, object_type):
         """Detect object center using Gemini AI (helper function)"""
+        debug_path = None
         try:
             import os, json
             from google import genai
             from google.genai import types
             from PIL import Image
             
+            # Load .env file if python-dotenv is available
+            try:
+                from dotenv import load_dotenv
+                # Try to load from /Spot/.env (common location)
+                env_paths = [
+                    '/Spot/.env',
+                    os.path.expanduser('~/Spot/.env'),
+                    os.path.join(os.path.dirname(__file__), '../../../../.env'),
+                    os.path.join(os.path.dirname(__file__), '../../../../../.env'),
+                ]
+                loaded = False
+                for env_path in env_paths:
+                    if os.path.exists(env_path):
+                        load_dotenv(env_path, override=False)
+                        rospy.loginfo(f"[DETECTION] Loaded .env from: {env_path}")
+                        loaded = True
+                        break
+                if not loaded:
+                    # Try loading from current directory
+                    load_dotenv(override=False)
+            except ImportError:
+                rospy.logwarn("[DETECTION] python-dotenv not available, relying on environment variables")
+            except Exception as e:
+                rospy.logwarn(f"[DETECTION] Failed to load .env: {e}")
+            
+            rospy.loginfo(f"[DETECTION] Starting detection for object_type='{object_type}'")
+            rospy.loginfo(f"[DETECTION] Image shape: {img.shape if hasattr(img, 'shape') else 'unknown'}")
+            
             api_key = os.getenv('GOOGLE_API_KEY')
             if not api_key:
-                rospy.logerr("GOOGLE_API_KEY not set")
+                rospy.logerr("[DETECTION] GOOGLE_API_KEY not set in environment or .env file")
+                rospy.logerr("[DETECTION] Checked .env files in: /Spot/.env, ~/Spot/.env, and current directory")
                 return None, None
             
             # Convert to PIL and detect
             img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(img_rgb)
             width, height = pil_image.size
+            rospy.loginfo(f"[DETECTION] Image size: {width}x{height} pixels")
             
+            # Normalize object name (replace underscores with spaces for natural language)
+            normalized_object_type = object_type.replace('_', ' ')
+            rospy.loginfo(f"[DETECTION] Normalized object name: '{object_type}' -> '{normalized_object_type}'")
+            
+            # Save debug image FIRST (before any API calls)
+            try:
+                import datetime
+                debug_dir = os.path.expanduser("~/grasp_debug_images")
+                os.makedirs(debug_dir, exist_ok=True)
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                safe_name = normalized_object_type.replace(' ', '_').replace('/', '_')
+                debug_path = os.path.join(debug_dir, f"grasp_{safe_name}_{timestamp}.jpg")
+                pil_image.save(debug_path)
+                rospy.loginfo(f"[DETECTION] ✓ Saved RAW debug image to: {debug_path}")
+                rospy.loginfo(f"[DETECTION] Image file size: {os.path.getsize(debug_path)} bytes")
+            except Exception as e:
+                rospy.logerr(f"[DETECTION] ✗ Failed to save debug image: {e}")
+                import traceback
+                rospy.logerr(f"[DETECTION] Traceback: {traceback.format_exc()}")
+            
+            # Call Gemini API
+            rospy.loginfo(f"[DETECTION] Calling Gemini API with model='gemini-2.5-flash-lite'")
             client = genai.Client(api_key=api_key)
             prompt = (
-                f"Find the most prominent {object_type} in the image. "
-                "Return ONLY valid JSON: [{\"label\": \"" + object_type + "\", \"box_2d\": [ymin, xmin, ymax, xmax]}] "
+                f"Find the most prominent {normalized_object_type} in the image. "
+                "Return ONLY valid JSON: [{\"label\": \"" + normalized_object_type + "\", \"box_2d\": [ymin, xmin, ymax, xmax]}] "
                 "Rules: ymin,xmin,ymax,xmax integers 0-1000, ymin<ymax, xmin<xmax, NO other text"
             )
             
@@ -573,9 +626,23 @@ class SpotGraspActionServer:
                 config=config
             )
             
+            rospy.loginfo(f"[DETECTION] Gemini raw response: {response.text}")
+            
             # Process detection result
-            boxes = json.loads(response.text)
-            if not boxes or "box_2d" not in boxes[0] or len(boxes[0]["box_2d"]) < 4:
+            try:
+                boxes = json.loads(response.text)
+                rospy.loginfo(f"[DETECTION] Parsed JSON: {boxes}")
+            except json.JSONDecodeError as e:
+                rospy.logerr(f"[DETECTION] Failed to parse Gemini JSON response: {e}")
+                rospy.logerr(f"[DETECTION] Raw response was: {response.text}")
+                return None, None
+            
+            if not boxes or not isinstance(boxes, list) or len(boxes) == 0:
+                rospy.logwarn(f"[DETECTION] Empty detection result for '{normalized_object_type}'")
+                return None, None
+            
+            if "box_2d" not in boxes[0] or len(boxes[0]["box_2d"]) < 4:
+                rospy.logwarn(f"[DETECTION] Invalid box_2d format in response: {boxes[0] if boxes else 'empty'}")
                 return None, None
             
             y1, x1, y2, x2 = boxes[0]["box_2d"][:4]
@@ -589,11 +656,15 @@ class SpotGraspActionServer:
             cx = int((x1 + x2) / 2000 * width)
             cy = int((y1 + y2) / 2000 * height)
             
-            rospy.loginfo(f"Detected {object_type} at ({cx}, {cy}) with bbox ({x1}, {y1}, {x2}, {y2})")
+            rospy.loginfo(f"[DETECTION] ✓ Detected '{normalized_object_type}' at pixel ({cx}, {cy}) with bbox ({x1}, {y1}, {x2}, {y2})")
             return cx, cy, (x1, y1, x2, y2)
                 
         except Exception as e:
-            rospy.logerr(f"Object detection failed: {e}")
+            rospy.logerr(f"[DETECTION] ✗ Object detection failed with exception: {e}")
+            import traceback
+            rospy.logerr(f"[DETECTION] Full traceback: {traceback.format_exc()}")
+            if debug_path:
+                rospy.loginfo(f"[DETECTION] Debug image was saved at: {debug_path}")
             return None, None
 
     def execute_automated_grasp_cb(self, goal):

@@ -29,6 +29,8 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
         <param name="dummy_mode" value="$(arg dummy_mode)"/>
         <param name="hostname" value="$(arg hostname)"/>
         <param name="ready_for_command" value="true"/>
+        <param name="start_services" value="true"/>
+        <param name="arm_action_server" value="true"/>
         <param name="verbose" value="$(arg verbose)"/>
     </node>
 
