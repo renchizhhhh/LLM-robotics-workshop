@@ -50,8 +50,8 @@ class SpotRobotManager:
             
             try:
                 # Use environment variables for authentication
-                username = os.getenv('SPOT_USERNAME', 'user')
-                password = os.getenv('SPOT_PASSWORD', 'corspotuser1')
+                username = os.getenv('SPOT_USERNAME')
+                password = os.getenv('SPOT_PASSWORD')
                 self.robot.authenticate(username, password)
                 rospy.loginfo("Spot entrance authenticated with robot using environment credentials")
             except Exception as e:
@@ -83,7 +83,7 @@ class SpotRobotManager:
         self.pub_robot_state = rospy.Publisher('~robot_state', String, queue_size=1)
         
         # Status publisher timer
-        self.status_timer = rospy.Timer(rospy.Duration(1.0), self.publish_status)
+        self.status_timer = rospy.Timer(rospy.Duration(nsecs=100000000), self.publish_status)
         
         # Initialize shared services
         if start_services:

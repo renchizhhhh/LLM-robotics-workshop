@@ -11,7 +11,6 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     <arg name="verbose" default="false" />
     <arg name="dummy_mode" default="false" />
     <arg name="hostname" default="192.168.1.109" />
-    <arg name="model_choice" default="oss" />
 
     <!-- Dummy Estop ROS node - provides estop services without real robot -->
     <node
