@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Score - Prompt {{ step }}</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #1f2937;
+        }
+        
+        .container {
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 12px 28px rgba(124,58,237,0.12);
+            padding: 40px 30px;
+            width: 100%;
+            max-width: 500px;
+            text-align: center;
+            border: 2px solid #7c3aed;
+        }
+        
+        h1 {
+            color: #111827;
+            margin-bottom: 30px;
+            font-size: 2em;
+        }
+        
+        .score-display {
+            background: linear-gradient(135deg, #5b7cfa 0%, #7c3aed 100%);
+            color: #ffffff;
+            padding: 30px;
+            border-radius: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .score-label {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+            opacity: 0.9;
+        }
+        
+        .score-value {
+            font-size: 3.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .waiting-message {
+            text-align: center;
+            color: #374151;
+            margin-top: 20px;
+            font-style: italic;
+            display: none;
+        }
+
+        .prompt-container, .breakdown-container {
+            margin-top: 20px;
+            padding: 16px;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            background: #f8f7ff;
+            text-align: left;
+            display: none;
+        }
+
+        .plan-container {
+            margin-top: 30px;
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid #e5e7eb;
+            background: #f9fafb;
+            display: none;
+        }
+
+        .prompt-label,
+        .breakdown-title {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 6px;
+            position: relative;
+            top: -2px;
+        }
+
+        .plan-title {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #1f2937;
+            margin-bottom: 12px;
+        }
+
+        canvas#planCanvas {
+            width: 100%;
+            max-width: 360px;
+            aspect-ratio: 1 / 1;
+            border-radius: 12px;
+            border: 1px solid #d1d5db;
+            background: #ffffff;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .spinner {
+            margin: 20px auto;
+            width: 48px;
+            height: 48px;
+            border: 5px solid #eee;
+            border-top-color: #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .breakdown-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .breakdown-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid #e5e7eb;
+            background: #ffffff;
+        }
+
+        .breakdown-details {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .breakdown-label {
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .breakdown-action {
+            color: #374151;
+            font-size: 0.95em;
+        }
+
+        .breakdown-status {
+            color: #6b7280;
+            font-size: 0.9em;
+        }
+
+        .breakdown-delta {
+            font-weight: 700;
+            min-width: 72px;
+            text-align: right;
+        }
+
+        .breakdown-delta.positive { color: #10b981; }
+        .breakdown-delta.negative { color: #ef4444; }
+        .breakdown-delta.neutral { color: #6b7280; }
+
+        .breakdown-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 700;
+            color: #111827;
+            margin-bottom: 6px;
+            padding: 0 2px;
+            margin-top: 2px;
+        }
+
+        .breakdown-header .penalty-label {
+            min-width: 90px;
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="pageTitle">📊 Prompt {{ step }} Results</h1>
+        <div class="score-display" id="scoreDisplay">
+            <div class="score-label">Your Score</div>
+            <div class="score-value" id="scoreValue">-</div>
+        </div>
+        <div class="waiting-message" id="waitingMessage">
+            <div class="spinner"></div>
+            {% if step == 3 or step == 4 %}
+            <p style="margin-top: 15px;" id="waitingCopy">
+                Waiting for final leaderboard...
+            </p>
+            {% endif %}
+        </div>
+        <div class="prompt-container" id="promptContainer">
+            <div class="prompt-label">Your submitted prompt</div>
+            <div class="prompt-text" id="promptText"></div>
+        </div>
+        <div class="plan-container" id="planContainer">
+            <div class="plan-title">Your plan trajectory</div>
+            <canvas id="planCanvas" width="320" height="320"></canvas>
+        </div>
+        <div class="breakdown-container" id="breakdownContainer">
+            <div class="breakdown-title">LLM generated plan</div>
+            <div class="breakdown-header">
+                <span>Commands</span>
+                <span class="penalty-label">Penalty pts</span>
+            </div>
+            <ul class="breakdown-list" id="breakdownList"></ul>
+        </div>
+    </div>
+    
+    <script>
+        const STEP = {{ step }};
+        const socket = io();
+        const userName = localStorage.getItem('survey_user_name');
+        const planContainer = document.getElementById('planContainer');
+        const planCanvas = document.getElementById('planCanvas');
+        const planCtx = planCanvas ? planCanvas.getContext('2d') : null;
+        const promptContainer = document.getElementById('promptContainer');
+        const promptTextEl = document.getElementById('promptText');
+        const breakdownContainer = document.getElementById('breakdownContainer');
+        const breakdownList = document.getElementById('breakdownList');
+        let lastPlanSnapshot = null;
+        let planWaypoints = [];
+
+        function hidePlanSnapshot() {
+            if (planContainer) {
+                planContainer.style.display = 'none';
+            }
+            if (planCtx) {
+                planCtx.clearRect(0, 0, planCanvas.width, planCanvas.height);
+            }
+        }
+
+        function renderPrompt(promptText) {
+            if (!promptContainer) return;
+            if (promptText && typeof promptText === 'string') {
+                promptContainer.style.display = 'block';
+                promptTextEl.textContent = promptText.trim();
+            } else {
+                promptContainer.style.display = 'none';
+                promptTextEl.textContent = '';
+            }
+        }
+
+        function parseWaypointFromAction(actionText) {
+            if (typeof actionText !== 'string') return null;
+            const match = actionText.match(/move(?:_|\s*)to(?:_|\s*)cell\s*row\s*=?\s*(-?\d+)\s*col\s*=?\s*(-?\d+)/i);
+            if (!match) return null;
+            const row = Number(match[1]);
+            const col = Number(match[2]);
+            if (!Number.isFinite(row) || !Number.isFinite(col)) return null;
+            return { row, col };
+        }
+
+        function renderBreakdown(breakdown) {
+            if (!breakdownContainer || !breakdownList) return;
+            if (!Array.isArray(breakdown) || breakdown.length === 0) {
+                breakdownContainer.style.display = 'none';
+                breakdownList.innerHTML = '';
+                planWaypoints = [];
+                if (lastPlanSnapshot) {
+                    drawPlanSnapshot(lastPlanSnapshot, planWaypoints);
+                }
+                return;
+            }
+
+            const normalized = breakdown
+                .filter(entry => entry && typeof entry === 'object')
+                .map(entry => {
+                    const rawAction = typeof entry.action === 'string' ? entry.action : '';
+                    const actionText = rawAction || 'Action';
+                    const waypoint = parseWaypointFromAction(actionText);
+                    return {
+                        index: Number.isFinite(Number(entry.index)) ? Number(entry.index) : null,
+                        action: actionText,
+                        delta: Number(entry.score_delta),
+                        status: typeof entry.status === 'string' ? entry.status : '',
+                        waypoint
+                    };
+                })
+                .sort((a, b) => {
+                    if (a.index === null && b.index === null) return 0;
+                    if (a.index === null) return 1;
+                    if (b.index === null) return -1;
+                    return a.index - b.index;
+                });
+
+            if (!normalized.length) {
+                breakdownContainer.style.display = 'none';
+                breakdownList.innerHTML = '';
+                planWaypoints = [];
+                if (lastPlanSnapshot) {
+                    drawPlanSnapshot(lastPlanSnapshot, planWaypoints);
+                }
+                return;
+            }
+
+            const waypoints = [];
+            const frag = document.createDocumentFragment();
+            normalized.forEach(entry => {
+                if (entry.waypoint) {
+                    const number = waypoints.length + 1;
+                    entry.waypointNumber = number;
+                    waypoints.push({ ...entry.waypoint, number });
+                }
+
+                const li = document.createElement('li');
+                li.className = 'breakdown-item';
+
+                const details = document.createElement('div');
+                details.className = 'breakdown-details';
+
+                const action = document.createElement('div');
+                action.className = 'breakdown-action';
+                if (entry.waypointNumber && entry.waypoint) {
+                    action.textContent = `Move to waypoint ${entry.waypointNumber} (row ${entry.waypoint.row}, col ${entry.waypoint.col})`;
+                } else {
+                    action.textContent = entry.action;
+                }
+                details.appendChild(action);
+
+                const rawStatuses = entry.status
+                    .split('+')
+                    .map(s => s.trim())
+                    .filter(Boolean);
+                const hasMixedCheckpoint = rawStatuses.length > 1;
+                const filteredStatuses = rawStatuses.filter(status => {
+                    if (hasMixedCheckpoint && status.toLowerCase() === 'checkpoint') {
+                        return false;
+                    }
+                    return true;
+                });
+                const statusLabels = filteredStatuses.map(s => s.replace(/_/g, ' '));
+                if (statusLabels.length) {
+                    const statusEl = document.createElement('div');
+                    statusEl.className = 'breakdown-status';
+                    statusEl.textContent = statusLabels.join(' • ');
+                    details.appendChild(statusEl);
+                }
+
+                const deltaEl = document.createElement('div');
+                deltaEl.className = 'breakdown-delta';
+                if (Number.isFinite(entry.delta)) {
+                    const deltaValue = Math.round(entry.delta);
+                    const penaltyValue = deltaValue < 0 ? Math.abs(deltaValue) : 0;
+                    deltaEl.textContent = penaltyValue === 0 ? '0' : `-${penaltyValue}`;
+                    if (penaltyValue === 0) {
+                        deltaEl.classList.add('positive');
+                    } else {
+                        deltaEl.classList.add('negative');
+                    }
+                } else {
+                    deltaEl.textContent = '—';
+                    deltaEl.classList.add('neutral');
+                }
+
+                li.appendChild(details);
+                li.appendChild(deltaEl);
+                frag.appendChild(li);
+            });
+
+            planWaypoints = waypoints;
+            breakdownList.innerHTML = '';
+            breakdownList.appendChild(frag);
+            breakdownContainer.style.display = 'block';
+            if (lastPlanSnapshot) {
+                drawPlanSnapshot(lastPlanSnapshot, planWaypoints);
+            }
+        }
+
+        function normalizeCells(list) {
+            if (!Array.isArray(list)) {
+                return [];
+            }
+            return list.map(cell => {
+                if (cell && typeof cell === 'object' && 'row' in cell && 'col' in cell) {
+                    return { row: Number(cell.row), col: Number(cell.col) };
+                }
+                if (Array.isArray(cell) && cell.length >= 2) {
+                    return { row: Number(cell[0]), col: Number(cell[1]) };
+                }
+                return null;
+            }).filter(Boolean);
+        }
+
+        function drawPlanSnapshot(snapshot, waypoints = planWaypoints) {
+            if (!planCtx || !snapshot) {
+                hidePlanSnapshot();
+                return;
+            }
+
+            const rows = Math.max(1, Number(snapshot?.grid?.rows) || 10);
+            const cols = Math.max(1, Number(snapshot?.grid?.cols) || 10);
+            const cells = Array.isArray(snapshot?.path) ? snapshot.path : [];
+
+            if (!cells.length) {
+                hidePlanSnapshot();
+                return;
+            }
+
+            planContainer.style.display = 'block';
+
+            // Keep canvas pixels in sync with the displayed size for crisp lines
+            const dpr = window.devicePixelRatio || 1;
+            const displayWidth = planCanvas.clientWidth || planCanvas.width;
+            const displayHeight = planCanvas.clientHeight || planCanvas.height;
+            const targetWidth = Math.max(1, Math.round(displayWidth * dpr));
+            const targetHeight = Math.max(1, Math.round(displayHeight * dpr));
+            if (planCanvas.width !== targetWidth || planCanvas.height !== targetHeight) {
+                planCanvas.width = targetWidth;
+                planCanvas.height = targetHeight;
+            }
+
+            planCtx.clearRect(0, 0, planCanvas.width, planCanvas.height);
+
+            const cellSize = Math.min(planCanvas.width / cols, planCanvas.height / rows);
+            const gridWidth = cellSize * cols;
+            const gridHeight = cellSize * rows;
+            const offsetX = (planCanvas.width - gridWidth) / 2;
+            const offsetY = (planCanvas.height - gridHeight) / 2;
+
+            // Base: passable area in dark gray
+            planCtx.fillStyle = '#4a4a4a';
+            planCtx.fillRect(0, 0, planCanvas.width, planCanvas.height);
+
+            planCtx.strokeStyle = '#d1d5db';
+            planCtx.lineWidth = 1;
+            for (let c = 0; c <= cols; c++) {
+                const x = offsetX + c * cellSize;
+                planCtx.beginPath();
+                planCtx.moveTo(x, offsetY);
+                planCtx.lineTo(x, offsetY + gridHeight);
+                planCtx.stroke();
+            }
+            for (let r = 0; r <= rows; r++) {
+                const y = offsetY + r * cellSize;
+                planCtx.beginPath();
+                planCtx.moveTo(offsetX, y);
+                planCtx.lineTo(offsetX + gridWidth, y);
+                planCtx.stroke();
+            }
+
+            const normalizedCells = normalizeCells(cells);
+            const obstacleCells = normalizeCells(snapshot?.obstacles);
+            const checkpointCells = normalizeCells(snapshot?.checkpoints);
+
+            function centerForCell(cell) {
+                const x = offsetX + (cell.col + 0.5) * cellSize;
+                const y = offsetY + (cell.row + 0.5) * cellSize;
+                return [x, y];
+            }
+
+            function drawCross(x, y, size) {
+                planCtx.strokeStyle = '#ef4444';
+                planCtx.lineWidth = 2;
+                planCtx.beginPath();
+                planCtx.moveTo(x - size, y - size);
+                planCtx.lineTo(x + size, y + size);
+                planCtx.moveTo(x + size, y - size);
+                planCtx.lineTo(x - size, y + size);
+                planCtx.stroke();
+            }
+
+            function drawCheckpointCell(cell) {
+                if (!cell) return;
+                const x = offsetX + cell.col * cellSize;
+                const y = offsetY + cell.row * cellSize;
+                planCtx.fillStyle = '#ffffff';
+                planCtx.fillRect(x, y, cellSize, cellSize);
+                planCtx.strokeStyle = '#0ea5e9';
+                planCtx.lineWidth = 1.5;
+                planCtx.strokeRect(x, y, cellSize, cellSize);
+            }
+
+            if (normalizedCells.length) {
+                obstacleCells.forEach(cell => {
+                    const x = offsetX + cell.col * cellSize;
+                    const y = offsetY + cell.row * cellSize;
+                    planCtx.fillStyle = '#c79a63'; // obstacle fill
+                    planCtx.fillRect(x, y, cellSize, cellSize);
+                });
+
+                checkpointCells.forEach(cell => drawCheckpointCell(cell));
+
+                planCtx.strokeStyle = '#fde047';
+                planCtx.lineWidth = 3;
+                planCtx.beginPath();
+                normalizedCells.forEach((cell, idx) => {
+                    const [x, y] = centerForCell(cell);
+                    if (idx === 0) {
+                        planCtx.moveTo(x, y);
+                    } else {
+                        planCtx.lineTo(x, y);
+                    }
+                });
+                planCtx.stroke();
+
+                const [startX, startY] = centerForCell(normalizedCells[0]);
+                planCtx.fillStyle = '#fde047';
+                planCtx.beginPath();
+                planCtx.arc(startX, startY, cellSize * 0.25, 0, Math.PI * 2);
+                planCtx.fill();
+
+                if (Array.isArray(waypoints) && waypoints.length) {
+                    planCtx.save();
+                    const baseRadius = Math.max(cellSize * 0.4, 10);
+                    const baseTextSize = Math.max(14, Math.floor(baseRadius * 2));
+                    planCtx.textAlign = 'center';
+                    planCtx.textBaseline = 'middle';
+                    const grouped = new Map();
+                    waypoints.forEach(wp => {
+                        const key = `${wp.row},${wp.col}`;
+                        if (!grouped.has(key)) {
+                            grouped.set(key, { cell: wp, numbers: [] });
+                        }
+                        grouped.get(key).numbers.push(wp.number);
+                    });
+                    grouped.forEach(group => {
+                        const label = group.numbers.join('/');
+                        const [x, y] = centerForCell(group.cell);
+                        const shrinkFactor = label.length > 1 ? 0.75 : 1;
+                        const fontSize = Math.max(10, Math.floor(baseTextSize * shrinkFactor));
+                        const markerRadius = baseRadius;
+                        planCtx.font = `700 ${fontSize}px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
+                        planCtx.fillStyle = '#fde047';
+                        planCtx.beginPath();
+                        planCtx.arc(x, y, markerRadius, 0, Math.PI * 2);
+                        planCtx.fill();
+                        planCtx.strokeStyle = '#ffffff';
+                        planCtx.lineWidth = 2;
+                        planCtx.stroke();
+                        planCtx.fillStyle = '#000000';
+                        planCtx.fillText(label, x, y);
+                    });
+                    planCtx.restore();
+                }
+            } else {
+                hidePlanSnapshot();
+            }
+        }
+
+        function applyPlanSnapshot(snapshot) {
+            if (snapshot && typeof snapshot === 'object') {
+                lastPlanSnapshot = snapshot;
+                drawPlanSnapshot(snapshot, planWaypoints);
+            } else if (!lastPlanSnapshot) {
+                hidePlanSnapshot();
+            }
+        }
+        
+        function goToScore(step) {
+            window.location.href = `/mobile/score/${step}`;
+        }
+
+        function syncToServerState(data) {
+            if (!data) return;
+            const mode = data.view_mode || data.mode;
+            // If we reach final, redirect even if no step is provided
+            if (mode === 'final') {
+                window.location.href = '/mobile/thanks';
+                return;
+            }
+            const modeStep = Number(data.mode_step ?? data.step ?? data.current_step ?? NaN);
+            if (!mode || Number.isNaN(modeStep)) {
+                return;
+            }
+
+            if (mode === 'results') {
+                if (modeStep >= 1 && modeStep <= 4 && modeStep !== STEP) {
+                    goToScore(modeStep);
+                }
+                return;
+            }
+
+            if (mode === 'entry') {
+                if (modeStep === 1) {
+                    window.location.href = '/mobile/step1and2';
+                } else if (modeStep === 3) {
+                    window.location.href = '/mobile/step3';
+                } else if (modeStep === 4) {
+                    window.location.href = '/mobile/step4';
+                }
+            }
+        }
+        
+        socket.on('connect', () => {
+            if (userName) {
+                socket.emit('get_my_score', { step: STEP, name: userName });
+            }
+            socket.emit('get_state');
+        });
+
+        socket.on('state_sync', (data) => syncToServerState(data));
+        socket.on('state_update', (data) => syncToServerState(data));
+        // step_update may lack mode; log only to avoid redirect loops
+        socket.on('step_update', (data) => console.log('Step update:', data.step));
+        
+        socket.on('my_score', (data) => {
+            if (data.step === STEP && data.name === userName) {
+                const scoreValue = document.getElementById('scoreValue');
+                scoreValue.textContent = (typeof data.score === 'number')
+                    ? data.score.toFixed(2)
+                    : (data.score ?? 'N/A');
+                applyPlanSnapshot(data.plan_snapshot);
+                renderPrompt(data.prompt);
+                renderBreakdown(data.breakdown);
+            }
+        });
+        
+        socket.on('results_ready_mobile', (data) => {
+            if (data.step === STEP) {
+                const userScores = data.user_scores || {};
+                const myScore = userScores[userName];
+                if (myScore !== undefined && myScore !== null) {
+                    document.getElementById('scoreValue').textContent = 
+                        typeof myScore === 'number' ? myScore.toFixed(2) : myScore;
+                }
+                const userPlans = data.user_plans || {};
+                applyPlanSnapshot(userPlans[userName]);
+                const userPrompts = data.user_prompts || {};
+                renderPrompt(userPrompts[userName]);
+                const userBreakdowns = data.user_breakdowns || {};
+                renderBreakdown(userBreakdowns[userName]);
+            } else if (data.step === STEP + 1 && STEP < 4) {
+                goToScore(data.step);
+            } else if (data.step > 4 && STEP === 4) {
+                window.location.href = '/mobile/thanks';
+            }
+        });
+        
+        socket.on('mode_update', (data) => {
+            syncToServerState({ ...data, view_mode: data.mode, mode_step: data.step });
+        });
+    </script>
+</body>
+</html>

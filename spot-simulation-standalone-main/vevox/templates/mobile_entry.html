@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Join the Activity - Enter Your Group Name</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #1f2937;
+        }
+        
+        .container {
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 12px 28px rgba(124,58,237,0.12);
+            padding: 40px 30px;
+            width: 100%;
+            max-width: 400px;
+            border: 2px solid #7c3aed;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #111827;
+            margin-bottom: 10px;
+            font-size: 1.8em;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #374151;
+            margin-bottom: 30px;
+            font-size: 0.95em;
+        }
+
+        .consent-card {
+            background: linear-gradient(145deg, #f3f4f6 0%, #eef2ff 100%);
+            border: 2px solid #7c3aed;
+            border-radius: 16px;
+            padding: 18px 16px;
+            margin-bottom: 24px;
+            color: #111827;
+            box-shadow: 0 10px 24px rgba(124, 58, 237, 0.1);
+        }
+
+        .consent-card h2 {
+            font-size: 1.05em;
+            margin-bottom: 8px;
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .consent-card p {
+            font-size: 0.95em;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+
+        .consent-options {
+            display: grid;
+            gap: 1px;
+            margin-top: 8px;
+        }
+
+        .consent-option {
+            padding: 4px 0;
+            font-size: 0.95em;
+            line-height: 1.5;
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .consent-option input[type="radio"] {
+            margin-top: 4px;
+            accent-color: #7c3aed;
+        }
+        
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            color: #1f2937;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+
+        .locked-note {
+            font-size: 0.9em;
+            color: #6b21a8;
+            margin-top: 6px;
+        }
+        
+        input[type="text"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #7c3aed;
+            background: #ffffff;
+            color: #111827;
+            border-radius: 10px;
+            font-size: 1.1em;
+            transition: border-color 0.3s;
+            caret-color: #ffffff;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #7c3aed;
+        }
+        
+        .submit-button {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.2em;
+            background: linear-gradient(135deg, #4252d9 0%, #6a3ab2 100%);
+            color: #ffffff;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+        }
+        
+        .submit-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 28px rgba(124,58,237,0.55);
+        }
+        
+        .submit-button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .error-message {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+            border: 2px solid #7c3aed;
+        }
+        
+        .success-message {
+            background: #ecfdf5;
+            color: #065f46;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: none;
+            border: 2px solid #7c3aed;
+        }
+        
+        .loading {
+            display: none;
+            text-align: center;
+            color: #374151;
+            margin-top: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👋 Welcome!</h1>
+        <p class="subtitle">Please enter your group name to join the activity</p>
+
+        <div class="consent-card">
+            <h2>Before you start</h2>
+            <p>In this activity, you will enter prompts.<br>
+            Your prompts are anonymous and not linked to your name or student number.</p>
+            <p style="margin-bottom:6px; font-weight:600;">May we use your anonymous prompts for future research and publications?</p>
+            <p id="consentLockedNote" style="display:none; font-size:0.9em; color:#6b21a8; margin-bottom:6px;">Consent choice saved for this group and cannot be changed.</p>
+            <div class="consent-options">
+                <label class="consent-option" for="consentWorkshop">
+                    <input type="radio" id="consentWorkshop" name="consent" value="workshop_only" required>
+                    <div><strong>Yes</strong> (Course use, future research, and publications)</div>
+                </label>
+                <label class="consent-option" for="consentResearch">
+                    <input type="radio" id="consentResearch" name="consent" value="workshop_research" required>
+                    <div><strong>No</strong> (Course use only)</div>
+                </label>
+            </div>
+        </div>
+        
+        <form id="nameForm" onsubmit="submitName(event)">
+            <div class="form-group">
+                <label for="nameInput">Your Group Name:</label>
+                <input 
+                    type="text" 
+                    id="nameInput" 
+                    placeholder="Enter your group name here" 
+                    required 
+                    autocomplete="name"
+                    autofocus
+                >
+                <div id="nameLockedNote" class="locked-note" style="display:none;">Group Name restored and locked.</div>
+            </div>
+            
+            <button type="submit" class="submit-button" id="submitButton">
+                Join Activity
+            </button>
+        </form>
+        
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+        <div class="loading" id="loading">Connecting...</div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let registered = false;
+        const consentRadios = document.querySelectorAll('input[name="consent"]');
+        const savedConsent = localStorage.getItem('survey_consent_choice');
+        const savedName = localStorage.getItem('survey_user_name');
+        const hasSavedProfile = Boolean(savedName && savedConsent);
+        const CLIENT_ID_KEY = 'survey_client_id';
+
+        function getClientId() {
+            let existing = localStorage.getItem(CLIENT_ID_KEY);
+            if (!existing) {
+                if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                    existing = crypto.randomUUID();
+                } else {
+                    existing = `client-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+                }
+                localStorage.setItem(CLIENT_ID_KEY, existing);
+            }
+            return existing;
+        }
+
+        const clientId = getClientId();
+
+        function lockConsentSelection(choice) {
+            consentRadios.forEach(r => {
+                if (r.value === choice) {
+                    r.checked = true;
+                }
+                r.disabled = true;
+            });
+            const consentLabel = document.getElementById('consentLockedNote');
+            if (consentLabel) {
+                consentLabel.style.display = 'block';
+            }
+        }
+
+        function lockName(name) {
+            const nameInput = document.getElementById('nameInput');
+            nameInput.value = name;
+            nameInput.readOnly = true;
+            const note = document.getElementById('nameLockedNote');
+            if (note) {
+                note.style.display = 'block';
+            }
+        }
+
+        function unlockSavedInfo(options = {}) {
+            localStorage.removeItem('survey_consent_choice');
+            localStorage.removeItem('survey_user_name');
+            consentRadios.forEach(r => {
+                r.checked = false;
+                r.disabled = false;
+            });
+            const consentLabel = document.getElementById('consentLockedNote');
+            if (consentLabel) {
+                consentLabel.style.display = 'none';
+            }
+            const nameInput = document.getElementById('nameInput');
+            nameInput.readOnly = false;
+            nameInput.value = '';
+            const note = document.getElementById('nameLockedNote');
+            if (note) {
+                note.style.display = 'none';
+            }
+            const errorEl = document.getElementById('errorMessage');
+            if (errorEl && options.clearMessage !== false) {
+                errorEl.style.display = 'none';
+            }
+        }
+
+        if (savedConsent) {
+            lockConsentSelection(savedConsent);
+        }
+        if (savedName) {
+            lockName(savedName);
+        }
+
+        function syncToServerState(data) {
+            if (!data) return;
+            const mode = data.view_mode || data.mode;
+            const modeStep = Number(data.mode_step ?? data.step ?? data.current_step ?? NaN);
+
+            // If mode is missing, skip to avoid oscillating redirects
+            if (!mode || Number.isNaN(modeStep)) {
+                return;
+            }
+
+            if (mode === 'final') {
+                window.location.href = '/mobile/thanks';
+                return;
+            }
+
+            if (mode === 'results' && modeStep >= 1 && modeStep <= 4) {
+                goToScore(modeStep);
+                return;
+            }
+
+            if (mode === 'entry') {
+                if (modeStep === 1 && registered) {
+                    window.location.href = '/mobile/step1and2';
+                } else if (modeStep === 3 && registered) {
+                    window.location.href = '/mobile/step3';
+                } else if (modeStep === 4 && registered) {
+                    window.location.href = '/mobile/step4';
+                }
+            }
+        }
+        
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            document.getElementById('loading').style.display = 'none';
+            socket.emit('get_state');
+        });
+
+        socket.on('state_sync', (data) => syncToServerState(data));
+        socket.on('state_update', (data) => syncToServerState(data));
+        
+        socket.on('registration_success', (data) => {
+            registered = true;
+            const consentChoice = data.consent_choice || localStorage.getItem('survey_consent_choice') || (document.querySelector('input[name="consent"]:checked')?.value);
+            if (consentChoice) {
+                localStorage.setItem('survey_consent_choice', consentChoice);
+                lockConsentSelection(consentChoice);
+            }
+            if (data.name) {
+                localStorage.setItem('survey_user_name', data.name);
+                lockName(data.name);
+            }
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').textContent = `Welcome, ${data.name}! Please wait for the session to begin...`;
+            document.getElementById('successMessage').style.display = 'block';
+            document.getElementById('nameForm').style.display = 'none';
+        });
+        
+        socket.on('registration_error', (data) => {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.textContent = data.error;
+            errorEl.style.display = 'block';
+            document.getElementById('submitButton').disabled = false;
+            if (data && data.code === 'name_taken') {
+                unlockSavedInfo({ clearMessage: false });
+                const nameInput = document.getElementById('nameInput');
+                nameInput.focus();
+            }
+        });
+
+        socket.on('clear_saved_info', () => {
+            unlockSavedInfo();
+        });
+        
+        // step_update may lack mode; log only to avoid redirect loops
+        socket.on('step_update', (data) => {
+            console.log('Step update:', data.step);
+        });
+        
+        function goToScore(step) {
+            window.location.href = `/mobile/score/${step}`;
+        }
+        
+        socket.on('mode_update', (data) => {
+            syncToServerState({ ...data, view_mode: data.mode, mode_step: data.step });
+        });
+        
+        function submitName(event) {
+            event.preventDefault();
+            const nameInput = document.getElementById('nameInput');
+            const name = nameInput.value.trim();
+            const consentRadio = document.querySelector('input[name="consent"]:checked');
+            const errorEl = document.getElementById('errorMessage');
+            const storedConsent = localStorage.getItem('survey_consent_choice');
+            const storedName = localStorage.getItem('survey_user_name');
+            
+            if (!consentRadio) {
+                errorEl.textContent = 'Please choose how your prompts may be used.';
+                errorEl.style.display = 'block';
+                return;
+            }
+
+            const consentChoice = storedConsent || consentRadio.value;
+
+            // Prevent changing consent after it has been stored locally
+            if (storedConsent && consentRadio.value !== storedConsent) {
+                errorEl.textContent = 'Consent choice is locked for this group. Please continue with the original selection.';
+                errorEl.style.display = 'block';
+                return;
+            }
+
+            if (storedName && name !== storedName) {
+                errorEl.textContent = 'Group name is locked. Please use the original group name.';
+                errorEl.style.display = 'block';
+                return;
+            }
+
+            if (name) {
+                document.getElementById('submitButton').disabled = true;
+                errorEl.style.display = 'none';
+                socket.emit('register_name', { name: name, consent_choice: consentChoice, client_id: clientId });
+            }
+        }
+    </script>
+</body>
+</html>

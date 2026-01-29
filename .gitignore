@@ -4,6 +4,12 @@ devel/
 log/
 install/
 .depend
+
+# catkin workspace (inside this repo)
+catkin_ws/build/
+catkin_ws/devel/
+catkin_ws/log/
+catkin_ws/install/
 # misc
 *.pyc
 __pycache__/

@@ -1,0 +1,18 @@
+# Standalone Spot Simulation Requirements
+# Python 3.8+ required
+
+# Core dependencies
+python-statemachine>=2.5.0
+python-dotenv>=1.1.0
+
+# LLM dependencies (optional - simulation works without these)
+openai>=1.0.0
+together>=0.2.0
+google-genai>=0.2.0
+
+# GUI dependencies (usually included with Python)
+# tkinter - included with Python standard library
+
+# Optional dependencies for enhanced functionality
+# numpy>=1.21.0  # For advanced math operations
+# matplotlib>=3.5.0  # For plotting (if needed)

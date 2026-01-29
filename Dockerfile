@@ -33,7 +33,7 @@ RUN arch=$(uname -m) && \
     export PATH="/root/miniconda3/bin:$PATH" && \
     /root/miniconda3/bin/conda create -n spotenv python=3.11 --yes && \
     /root/miniconda3/envs/spotenv/bin/python -m pip install --upgrade pip setuptools wheel && \
-    /root/miniconda3/envs/spotenv/bin/pip install -r /Spot/catkin_ws/requirements.txt && \
+    /root/miniconda3/envs/spotenv/bin/pip install -r /Spot/requirements.txt && \
     /root/miniconda3/bin/conda clean --all --yes
 
 RUN source ./ros_entrypoint.sh || true

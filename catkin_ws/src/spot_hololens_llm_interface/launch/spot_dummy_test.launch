@@ -11,6 +11,8 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
     <arg name="verbose" default="false" />
     <arg name="dummy_mode" default="false" />
     <arg name="hostname" default="192.168.1.109" />
+    <arg name="record_bag" default="true" />
+    <arg name="bag_file" default="$(env HOME)/.ros/spot_dummy_topics" />
 
     <!-- Dummy Estop ROS node - provides estop services without real robot -->
     <node
@@ -47,5 +49,10 @@ l       2. In second terminal: rosrun spot_hololens_llm_interface test_real_spot
         <param name="tcp_ip" type="string" value="$(arg tcp_ip)"/>
         <param name="tcp_port" type="int" value="$(arg tcp_port)"/>
     </node>
-    
+
+    <!-- Optional rosbag recorder capturing all topics (includes robot pose); -o adds timestamp to avoid overwrite -->
+    <group if="$(arg record_bag)">
+        <node name="spot_dummy_rosbag" pkg="rosbag" type="record" output="screen"
+              args="-o $(arg bag_file) -a"/>
+    </group>
 </launch>

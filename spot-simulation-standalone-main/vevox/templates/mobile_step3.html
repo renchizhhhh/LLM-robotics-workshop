@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Prompt 3</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #ffffff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: #1f2937;
+        }
+        
+        .container {
+            background: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 12px 28px rgba(124,58,237,0.12);
+            padding: 30px;
+            width: 100%;
+            max-width: 500px;
+            border: 2px solid #7c3aed;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #111827;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #7c3aed;
+            background: #ffffff;
+            color: #111827;
+            border-radius: 10px;
+            font-size: 1em;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 150px;
+            transition: border-color 0.3s;
+            caret-color: #ffffff;
+        }
+        
+        textarea:focus {
+            outline: none;
+            border-color: #7c3aed;
+        }
+        
+        textarea:disabled {
+            background: #f3f4f6;
+            cursor: not-allowed;
+        }
+        
+        .button-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 15px;
+            font-size: 1.1em;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            font-weight: bold;
+            color: #ffffff;
+        }
+        
+        .clear-button {
+            background: #b91c1c;
+            color: #e5e7eb;
+        }
+        
+        .clear-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(185, 28, 28, 0.4);
+        }
+        
+        .save-button {
+            background: linear-gradient(135deg, #5b7cfa 0%, #7c3aed 100%);
+            color: #ffffff;
+        }
+        
+        .save-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(66, 82, 217, 0.4);
+        }
+        
+        button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .status-message {
+            margin-top: 15px;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+        
+        .status-message.success {
+            background: #ecfdf5;
+            color: #065f46;
+            display: block;
+        }
+        
+        .waiting-message {
+            text-align: center;
+            color: #374151;
+            margin-top: 20px;
+            font-style: italic;
+        }
+
+        .timer {
+            text-align: center;
+            font-weight: 600;
+            color: #7c3aed;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+
+        .timer span {
+            font-variant-numeric: tabular-nums;
+        }
+
+        .timer-expired {
+            color: #b91c1c;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📝 Prompt 3 (reasoning)</h1>
+        <p style="text-align: center; color: #666; margin-bottom: 20px;">
+            Please fill in your response below
+        </p>
+
+        <div class="timer">
+            Time remaining: <span id="timerDisplay">04:00</span>
+        </div>
+        
+        <form id="responseForm" onsubmit="submitResponse(event)">
+            <div class="form-group">
+                <textarea 
+                    id="responseInput" 
+                    placeholder="Type your response here..." 
+                    required
+                    autofocus
+                ></textarea>
+            </div>
+            
+            <div class="button-group">
+                <button type="submit" class="save-button" id="saveButton">
+                    Save
+                </button>
+            </div>
+        </form>
+        
+        <div class="status-message" id="statusMessage"></div>
+    </div>
+    
+    <script>
+        const socket = io();
+        let submitted = false;
+        let registered = false;
+        let attemptingRegister = false;
+        let savedRequestSent = false;
+        const savedName = localStorage.getItem('survey_user_name');
+        const savedConsent = localStorage.getItem('survey_consent_choice');
+        const CLIENT_ID_KEY = 'survey_client_id';
+        function getClientId() {
+            let existing = localStorage.getItem(CLIENT_ID_KEY);
+            if (!existing) {
+                if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+                    existing = crypto.randomUUID();
+                } else {
+                    existing = `client-${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+                }
+                localStorage.setItem(CLIENT_ID_KEY, existing);
+            }
+            return existing;
+        }
+        const clientId = getClientId();
+        const step = 3;
+        const STEP3_TIMER_SECONDS = 4 * 60; // 4 minutes
+        const timerDisplay = document.getElementById('timerDisplay');
+        const responseInput = document.getElementById('responseInput');
+        const saveButton = document.getElementById('saveButton');
+        const statusMessage = document.getElementById('statusMessage');
+        let countdownInterval = null;
+        let remainingSeconds = null;
+
+        function startTimer(seconds) {
+            if (typeof seconds !== 'number' || Number.isNaN(seconds)) return;
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+            remainingSeconds = Math.max(0, Math.floor(seconds));
+            const updateText = () => {
+                const minutes = String(Math.floor(remainingSeconds / 60)).padStart(2, '0');
+                const secs = String(remainingSeconds % 60).padStart(2, '0');
+                timerDisplay.textContent = `${minutes}:${secs}`;
+            };
+            updateText();
+            countdownInterval = setInterval(() => {
+                if (remainingSeconds > 0) {
+                    remainingSeconds -= 1;
+                    updateText();
+                } else {
+                    clearInterval(countdownInterval);
+                }
+            }, 1000);
+        }
+
+        function syncToServerState(data) {
+            if (!data) return;
+            const mode = data.view_mode || data.mode;
+            const modeStep = Number(data.mode_step ?? data.step ?? data.current_step ?? NaN);
+            const serverRegistered = data.registered;
+            const serverRemaining = data.remaining_seconds;
+
+            if (serverRegistered === true) {
+                registered = true;
+                if (!savedRequestSent && savedName) {
+                    socket.emit('request_saved_responses', { step: step, name: savedName });
+                    savedRequestSent = true;
+                }
+            }
+
+            if (typeof serverRemaining === 'number') {
+                startTimer(serverRemaining);
+            } else if (remainingSeconds === null) {
+                startTimer(STEP3_TIMER_SECONDS);
+            }
+
+            const canAutoRegister = Boolean(savedName && savedConsent);
+            if (serverRegistered === false && !attemptingRegister && !registered && !canAutoRegister) {
+                window.location.href = '/mobile';
+                return;
+            }
+
+            if (!mode || Number.isNaN(modeStep)) {
+                return;
+            }
+
+            if (mode === 'final') {
+                window.location.href = '/mobile/thanks';
+                return;
+            }
+
+            if (mode === 'results') {
+                if (modeStep >= 1 && modeStep <= 4) {
+                    goToScore(modeStep);
+                }
+                return;
+            }
+
+            if (mode === 'entry' && modeStep === 1) {
+                window.location.href = '/mobile/step1and2';
+            } else if (mode === 'entry' && modeStep === 4) {
+                window.location.href = '/mobile/step4';
+            }
+        }
+
+        function ensureRegistration() {
+            if (registered || attemptingRegister) return;
+            if (savedName && savedConsent) {
+                attemptingRegister = true;
+                socket.emit('register_name', { name: savedName, consent_choice: savedConsent, client_id: clientId });
+            }
+        }
+
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            ensureRegistration();
+            socket.emit('get_state');
+            if (remainingSeconds === null) {
+                startTimer(STEP3_TIMER_SECONDS);
+            }
+        });
+
+        socket.on('state_sync', (data) => syncToServerState(data));
+        socket.on('state_update', (data) => syncToServerState(data));
+        // step_update may lack mode; log only to avoid redirects
+        socket.on('step_update', (data) => console.log('Step update:', data.step));
+        
+        socket.on('submission_success', (data) => {
+            if (data.step === step) {
+                setSubmittedState(true);
+                statusMessage.textContent = 'Response saved successfully!';
+                statusMessage.classList.add('success');
+            }
+        });
+
+        socket.on('registration_success', (data) => {
+            registered = true;
+            attemptingRegister = false;
+            if (data && data.name) {
+                localStorage.setItem('survey_user_name', data.name);
+            }
+            if (data && data.consent_choice) {
+                localStorage.setItem('survey_consent_choice', data.consent_choice);
+            }
+            if (!savedRequestSent && savedName) {
+                socket.emit('request_saved_responses', { step: step, name: savedName });
+                savedRequestSent = true;
+            }
+        });
+
+        socket.on('registration_error', (data = {}) => {
+            attemptingRegister = false;
+            const message = data.error || 'Registration failed. Please re-join from the start and pick a different Group Name.';
+            alert(message);
+            if (data.code === 'name_taken') {
+                localStorage.removeItem('survey_user_name');
+                localStorage.removeItem('survey_consent_choice');
+            }
+            window.location.href = '/mobile';
+        });
+        
+        socket.on('submission_error', (data) => {
+            alert('Error: ' + data.error);
+            saveButton.disabled = false;
+        });
+        
+        socket.on('saved_responses', (data) => {
+            if (parseInt(data.step, 10) !== step || !data.responses) return;
+            const responses = data.responses;
+            if (responses.step3 !== undefined && responses.step3 !== null) {
+                responseInput.value = responses.step3;
+            }
+            if (data.submitted) {
+                setSubmittedState(true);
+                statusMessage.textContent = 'Response saved successfully!';
+                statusMessage.classList.add('success');
+            } else {
+                setSubmittedState(false);
+            }
+        });
+        
+        socket.on('step_update', (data) => {
+            console.log('Step update:', data.step);
+            if (data.step === 4) {
+                window.location.href = '/mobile/step4';
+            }
+        });
+        
+        const goToScore = (stepNum) => window.location.href = `/mobile/score/${stepNum}`;
+        
+        socket.on('mode_update', (data) => {
+            syncToServerState({ ...data, view_mode: data.mode, mode_step: data.step });
+        });
+        
+        socket.on('results_ready_mobile', (data) => {
+            if (data.step === 3) {
+                goToScore(3);
+            } else if (data.step === 4) {
+                goToScore(4);
+            }
+        });
+        
+        function setSubmittedState(isSubmitted) {
+            submitted = isSubmitted;
+            responseInput.disabled = isSubmitted;
+            saveButton.disabled = isSubmitted;
+            if (!isSubmitted) {
+                statusMessage.textContent = '';
+                statusMessage.classList.remove('success');
+            }
+        }
+        
+        function submitResponse(event) {
+            event.preventDefault();
+            if (submitted) return;
+            
+            const response = responseInput.value.trim();
+            
+            if (response) {
+                // Get user name from localStorage
+                const userName = localStorage.getItem('survey_user_name');
+                // Assume user already registered via entry page; no auto-registration here
+                saveButton.disabled = true;
+                socket.emit('submit_response', { step: step, response: response, name: userName });
+            }
+        }
+
+        // startTimer handles updates; no separate startCountdown needed
+    </script>
+</body>
+</html>

@@ -619,7 +619,10 @@ class SpotGraspActionServer:
                 "Rules: ymin,xmin,ymax,xmax integers 0-1000, ymin<ymax, xmin<xmax, NO other text"
             )
             
-            config = types.GenerateContentConfig(response_mime_type="application/json")
+            config = types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0
+            )
             response = client.models.generate_content(
                 model="gemini-2.5-flash-lite",
                 contents=[pil_image, prompt],
@@ -786,12 +789,12 @@ class SpotGraspActionServer:
             feedback.current_state = "WAITING_FOR_USER_CONFIRMATION"
             feedback.progress = 0.3
             feedback.waiting_for_user_input = True
-            feedback.status_message = f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to grasp or Ctrl+C to cancel"
+            feedback.status_message = f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to grasp, 'n' to cancel, or Ctrl+C to cancel"
             self.automated_grasp_server.publish_feedback(feedback)
             
-            rospy.loginfo(f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to continue grasping...")
+            rospy.loginfo(f"Detected {goal.object_type} at ({pixel_x}, {pixel_y}). Press Enter to continue grasping or 'n' to cancel...")
             try:
-                rospy.loginfo("Waiting for user approval: Enter key or /user/approve_grasp == True")
+                rospy.loginfo("Waiting for user approval: Enter key, /user/approve_grasp == True, or 'n' to cancel")
                 approved = False
                 self.user_approve_event.clear()
 
@@ -802,7 +805,13 @@ class SpotGraspActionServer:
 
                     if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
                         try:
-                            _ = sys.stdin.readline()
+                            user_input = sys.stdin.readline()
+                            if user_input.strip().lower() == 'n':
+                                result.success = False
+                                result.message = "User rejected grasp"
+                                self.automated_grasp_server.set_aborted(result)
+                                rospy.loginfo(f"The user rejected the current grasp")
+                                return
                             approved = True
                             break
                         except Exception:
