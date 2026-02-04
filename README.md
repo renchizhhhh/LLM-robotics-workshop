@@ -99,12 +99,6 @@ Notes:
 python spot-simulation-standalone-main/main.py
 ```
 
-Common flags:
-
-- `--world <id>`: select a world
-- `--no-speech`: disable speech mode
-- `--headless`: run without GUI
-
 ### 3) Start ROS services (dummy mode or real robot)
 
 Dummy mode (no robot required):
