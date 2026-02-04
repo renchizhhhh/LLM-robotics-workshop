@@ -1,4 +1,4 @@
-# LLM robotics workshop (GUI + web interface + Spot/ROS bridge)
+# LLM robotics workshop
 
 This repo contains the software used in an LLM robotics workshop:
 
@@ -16,7 +16,7 @@ This repo contains the software used in an LLM robotics workshop:
 
 ## Install
 
-### Option A: Docker (recommended for ROS + consistent Python)
+### Option A: Docker (recommended)
 
 Build:
 
@@ -45,7 +45,7 @@ catkin_make
 source devel/setup.bash
 ```
 
-### Option B: Native (recommended for running the Tkinter GUI)
+### Option B: Native
 
 You need ROS Noetic installed and a Python env named `spotenv`.
 
