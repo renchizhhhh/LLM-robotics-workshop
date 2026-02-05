@@ -6,6 +6,8 @@ This repo contains the software used in an LLM robotics workshop:
 - A **host/client web interface** for collecting participants’ prompts and showing results/leaderboards on devices over a local Wi‑Fi network.
 - A **ROS Noetic catkin workspace** that bridges the GUI to **Spot SDK 5.0.1** services for real robot execution.
 
+The data collected from the workshop and scripts used for analysis is in another repo: https://github.com/renchizhhhh/LLM-robotics-workshop-data
+
 ## Repo layout
 
 - `spot-simulation-standalone-main/`: GUI + web interface + evaluation scripts (workshop laptop).
